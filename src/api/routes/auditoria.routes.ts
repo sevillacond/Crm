@@ -13,7 +13,7 @@ router.get(
   async (req: Request, res: Response, next) => {
     try {
       const limit = req.query.limit ? Number(req.query.limit) : 100;
-      const logs = await auditoriaService.listLogs(req.instanceId, limit);
+      const logs = await auditoriaService.listLogs(req.actor!.instanceId, limit);
       res.json(logs);
     } catch (err) {
       next(err);

@@ -1,11 +1,10 @@
+import { eq, and, isNull, desc } from 'drizzle-orm';
 import { db, isDbConnected } from '../../db/client.ts';
 import { dealsTable, DealDb } from '../../db/schema/deals.ts';
 import { dealHistoryTable, DealHistoryDb } from '../../db/schema/dealHistory.ts';
-import { eq, isNull, and, desc } from 'drizzle-orm';
 import { INITIAL_DEALS } from '../../data/mockData.ts';
 import { Deal, DealEtapa, ViabilidadeStatus } from '../../types/index.ts';
 import { env } from '../../config/env.ts';
-import crypto from 'crypto';
 
 export interface DealHistoryEntry {
   id: string;
@@ -22,9 +21,14 @@ class DealsRepository {
     ...d,
     instanceId: 'inst-enlace-fibra-001'
   }));
+
   private fallbackHistory: DealHistoryEntry[] = [];
 
-  async getAll(instanceId?: string): Promise<Deal[]> {
+  async list(instanceId: string): Promise<Deal[]> {
+    if (!instanceId && env.NODE_ENV === 'production') {
+      throw new Error('instanceId é estritamente obrigatório para listar negócios em produção.');
+    }
+
     if (isDbConnected()) {
       try {
         const conditions = [isNull(dealsTable.deletedAt)];
@@ -36,7 +40,7 @@ class DealsRepository {
           .select()
           .from(dealsTable)
           .where(and(...conditions))
-          .orderBy(desc(dealsTable.updatedAt));
+          .orderBy(desc(dealsTable.createdAt));
 
         return rows.map(r => this.mapToDomain(r));
       } catch (err: any) {
@@ -55,7 +59,11 @@ class DealsRepository {
       .filter(d => (!instanceId || d.instanceId === instanceId) && !((d as any).deletedAt));
   }
 
-  async getById(id: string, instanceId?: string): Promise<Deal | null> {
+  async getById(id: string, instanceId: string): Promise<Deal | null> {
+    if (!instanceId && env.NODE_ENV === 'production') {
+      throw new Error('instanceId é estritamente obrigatório para consultar negócio em produção.');
+    }
+
     if (isDbConnected()) {
       try {
         const conditions = [eq(dealsTable.id, id), isNull(dealsTable.deletedAt)];
@@ -91,8 +99,11 @@ class DealsRepository {
     return found || null;
   }
 
-  async create(deal: Deal, instanceId?: string): Promise<Deal> {
-    const finalInstanceId = instanceId || (deal as any).instanceId || env.INSTANCE_ID || 'inst-enlace-fibra-001';
+  async create(deal: Deal, instanceId: string): Promise<Deal> {
+    const finalInstanceId = instanceId || (deal as any).instanceId;
+    if (!finalInstanceId) {
+      throw new Error('instanceId é obrigatório para cadastrar negócio.');
+    }
 
     if (isDbConnected()) {
       try {
@@ -109,47 +120,53 @@ class DealsRepository {
           dataPrevisao: deal.dataPrevisao,
           responsavelId: deal.responsavelId,
           statusViabilidade: deal.statusViabilidade,
-          ctoProxima: deal.ctoProxima,
-          distanciaMetros: deal.distanciaMetros,
-          motivoPerda: deal.motivoPerda,
+          ctoProxima: deal.ctoProxima || null,
+          distanciaMetros: deal.distanciaMetros || null,
+          motivoPerda: deal.motivoPerda || null,
           notas: deal.notas,
           createdAt: new Date(),
           updatedAt: new Date()
         });
+
         return deal;
       } catch (err: any) {
         if (env.NODE_ENV === 'production') {
-          throw new Error(`Falha no banco de dados ao persistir deal em produção: ${err.message}`);
+          throw new Error(`Falha ao criar negócio no Postgres em produção: ${err.message}`);
         }
-        console.warn('[DealsRepository] Erro ao persistir deal no Postgres:', err.message);
+        console.warn('[DealsRepository] Erro ao criar deal no Postgres:', err.message);
       }
     }
 
     if (env.NODE_ENV === 'production') {
-      throw new Error('Banco de dados PostgreSQL indisponível. Impossível salvar deal em produção.');
+      throw new Error('Banco de dados PostgreSQL indisponível. Operação interrompida em produção.');
     }
 
-    this.fallbackDeals.unshift({ ...deal, instanceId: finalInstanceId });
+    const record = { ...deal, instanceId: finalInstanceId };
+    this.fallbackDeals.unshift(record);
     return deal;
   }
 
   async updateStage(
     id: string,
     novaEtapa: DealEtapa,
-    probabilidade: number,
-    userId: string,
-    instanceId?: string,
+    instanceId: string,
+    actorId: string,
     motivo?: string
   ): Promise<Deal | null> {
-    const deal = await this.getById(id, instanceId);
-    if (!deal) return null;
+    if (!instanceId && env.NODE_ENV === 'production') {
+      throw new Error('instanceId é obrigatório para atualizar negócio em produção.');
+    }
 
-    const etapaAnterior = deal.etapa;
+    const currentDeal = await this.getById(id, instanceId);
+    if (!currentDeal) return null;
+
+    const etapaAnterior = currentDeal.etapa;
+    const historyId = `dh_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const updatedAt = new Date();
-    const historyId = `dlh_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
 
     if (isDbConnected()) {
       try {
+        // Enforce transaction for atomic stage update and history insertion
         await db.transaction(async (tx) => {
           const conditions = [eq(dealsTable.id, id)];
           if (instanceId) {
@@ -160,7 +177,7 @@ class DealsRepository {
             .update(dealsTable)
             .set({
               etapa: novaEtapa,
-              probabilidade,
+              motivoPerda: novaEtapa === 'PERDIDO' ? motivo : currentDeal.motivoPerda,
               updatedAt
             })
             .where(and(...conditions));
@@ -171,7 +188,7 @@ class DealsRepository {
             etapaAnterior,
             etapaNova: novaEtapa,
             motivo: motivo || null,
-            userId,
+            userId: actorId,
             createdAt: updatedAt
           });
         });
@@ -179,9 +196,9 @@ class DealsRepository {
         return this.getById(id, instanceId);
       } catch (err: any) {
         if (env.NODE_ENV === 'production') {
-          throw new Error(`Falha no banco de dados ao transicionar etapa no Postgres em produção: ${err.message}`);
+          throw new Error(`Falha ao atualizar etapa do negócio no Postgres em produção: ${err.message}`);
         }
-        console.warn('[DealsRepository] Erro ao atualizar etapa e histórico no Postgres:', err.message);
+        console.warn('[DealsRepository] Erro ao atualizar etapa no Postgres:', err.message);
       }
     }
 
@@ -189,16 +206,15 @@ class DealsRepository {
       throw new Error('Banco de dados PostgreSQL indisponível. Operação interrompida em produção.');
     }
 
-    // Fallback in dev/test only
     const idx = this.fallbackDeals.findIndex(d => d.id === id && (!instanceId || d.instanceId === instanceId));
-    if (idx !== -1) {
-      this.fallbackDeals[idx] = {
-        ...this.fallbackDeals[idx],
-        etapa: novaEtapa,
-        probabilidade,
-        updatedAt: updatedAt.toISOString()
-      };
-    }
+    if (idx === -1) return null;
+
+    this.fallbackDeals[idx] = {
+      ...this.fallbackDeals[idx],
+      etapa: novaEtapa,
+      motivoPerda: novaEtapa === 'PERDIDO' ? motivo : this.fallbackDeals[idx].motivoPerda,
+      updatedAt: updatedAt.toISOString()
+    };
 
     this.fallbackHistory.unshift({
       id: historyId,
@@ -206,20 +222,45 @@ class DealsRepository {
       etapaAnterior,
       etapaNova: novaEtapa,
       motivo,
-      userId,
+      userId: actorId,
       createdAt: updatedAt.toISOString()
     });
 
     return this.getById(id, instanceId);
   }
 
-  async getHistoryByDealId(dealId: string): Promise<DealHistoryEntry[]> {
+  async getHistoryByDealId(dealId: string, instanceId: string): Promise<DealHistoryEntry[]> {
+    if (!instanceId && env.NODE_ENV === 'production') {
+      throw new Error('instanceId é obrigatório para consultar histórico de deal em produção.');
+    }
+
+    // P0: Isolamento estrito de histórico de deal
+    // 1. Validar que o deal pertence à mesma instância
+    const deal = await this.getById(dealId, instanceId);
+    if (!deal) {
+      return [];
+    }
+
     if (isDbConnected()) {
       try {
         const rows = await db
-          .select()
+          .select({
+            id: dealHistoryTable.id,
+            dealId: dealHistoryTable.dealId,
+            etapaAnterior: dealHistoryTable.etapaAnterior,
+            etapaNova: dealHistoryTable.etapaNova,
+            motivo: dealHistoryTable.motivo,
+            userId: dealHistoryTable.userId,
+            createdAt: dealHistoryTable.createdAt
+          })
           .from(dealHistoryTable)
-          .where(eq(dealHistoryTable.dealId, dealId))
+          .innerJoin(dealsTable, eq(dealHistoryTable.dealId, dealsTable.id))
+          .where(
+            and(
+              eq(dealHistoryTable.dealId, dealId),
+              eq(dealsTable.instanceId, instanceId)
+            )
+          )
           .orderBy(desc(dealHistoryTable.createdAt));
 
         return rows.map(r => ({

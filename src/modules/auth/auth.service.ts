@@ -6,11 +6,9 @@ import { auditoriaService } from '../auditoria/auditoria.service.ts';
 import { sessionsRepository } from './sessions.repository.ts';
 import { User, Role } from '../../types/index.ts';
 import { env } from '../../config/env.ts';
+import { checkLoginLockout, recordFailedLogin, clearFailedLogin } from '../../shared/redis.ts';
 
 const TOKEN_EXPIRY_SECONDS = 8 * 60 * 60; // 8 hours
-
-// In-memory failed attempts tracker for brute force mitigation
-const failedAttempts = new Map<string, { count: number; lockedUntil: number }>();
 
 export interface AuthSession {
   token: string;
@@ -20,7 +18,7 @@ export interface AuthSession {
 
 export interface JwtTokenPayload {
   sub: string;
-  instanceId?: string;
+  instanceId: string;
   name: string;
   email: string;
   role: Role;
@@ -37,17 +35,16 @@ class AuthService {
     const normalizedEmail = email.toLowerCase().trim();
     const rateKey = `${ipAddress || 'unknown'}:${normalizedEmail}`;
 
-    // 1. Check brute force lock
-    const attemptRecord = failedAttempts.get(rateKey);
-    if (attemptRecord && attemptRecord.lockedUntil > Date.now()) {
-      const waitSeconds = Math.ceil((attemptRecord.lockedUntil - Date.now()) / 1000);
-      throw new Error(`Muitas tentativas incorretas. Tente novamente em ${waitSeconds} segundos.`);
+    // 1. Check brute force lock via Redis / Distributed Protection
+    const lockout = await checkLoginLockout(rateKey);
+    if (lockout.locked) {
+      throw new Error(`Muitas tentativas incorretas. Tente novamente em ${lockout.waitSeconds} segundos.`);
     }
 
     // 2. Query user with auth hash
     const userWithAuth = await usersRepository.getByEmailWithAuth(normalizedEmail);
     if (!userWithAuth) {
-      this.recordFailedAttempt(rateKey);
+      await recordFailedLogin(rateKey);
       throw new Error('Credenciais inválidas.');
     }
 
@@ -61,16 +58,21 @@ class AuthService {
 
     // Proibição estrita: NUNCA usar senhas master ou universais
     if (!passwordMatches) {
-      this.recordFailedAttempt(rateKey);
+      await recordFailedLogin(rateKey);
       throw new Error('Credenciais inválidas.');
     }
 
     // Reset failed attempts on success
-    failedAttempts.delete(rateKey);
+    await clearFailedLogin(rateKey);
+
+    const instanceId = userWithAuth.instanceId || env.INSTANCE_ID;
+    if (!instanceId) {
+      throw new Error('Usuário autenticado sem instanceId associado. Contate o administrador do sistema.');
+    }
 
     const user: User = {
       id: userWithAuth.id,
-      instanceId: userWithAuth.instanceId,
+      instanceId,
       name: userWithAuth.name,
       email: userWithAuth.email,
       role: userWithAuth.role,
@@ -150,7 +152,7 @@ class AuthService {
 
     if (user) {
       await auditoriaService.logEvent({
-        instanceId: user.instanceId,
+        instanceId: user.instanceId || 'inst_unknown',
         actorId: user.id,
         actorName: user.name,
         actorRole: user.role,
@@ -162,16 +164,6 @@ class AuthService {
         userAgent
       });
     }
-  }
-
-  private recordFailedAttempt(key: string) {
-    const current = failedAttempts.get(key) || { count: 0, lockedUntil: 0 };
-    current.count += 1;
-    if (current.count >= 5) {
-      current.lockedUntil = Date.now() + 5 * 60 * 1000; // 5 min lock
-      console.warn(`[AuthService] Limite de tentativas excedido para ${key}. Bloqueado por 5 minutos.`);
-    }
-    failedAttempts.set(key, current);
   }
 }
 

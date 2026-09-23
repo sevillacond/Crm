@@ -1,17 +1,9 @@
+import { eq, and, isNull, or, ilike, desc } from 'drizzle-orm';
 import { db, isDbConnected } from '../../db/client.ts';
 import { contatosTable, ContatoDb } from '../../db/schema/contatos.ts';
-import { eq, isNull, and, or, ilike, desc } from 'drizzle-orm';
 import { INITIAL_CONTATOS } from '../../data/mockData.ts';
 import { Contato, ContatoStatus } from '../../types/index.ts';
 import { env } from '../../config/env.ts';
-
-export interface ContatosFilter {
-  instanceId?: string;
-  query?: string;
-  status?: string;
-  limit?: number;
-  offset?: number;
-}
 
 class ContatosRepository {
   private fallbackContatos: (Contato & { instanceId?: string })[] = INITIAL_CONTATOS.map(c => ({
@@ -19,14 +11,23 @@ class ContatosRepository {
     instanceId: 'inst-enlace-fibra-001'
   }));
 
-  async findMany(filters: ContatosFilter = {}): Promise<{ data: Contato[]; total: number }> {
-    const { instanceId, query, status, limit = 50, offset = 0 } = filters;
+  async list(filters?: {
+    query?: string;
+    status?: string;
+    limit?: number;
+    offset?: number;
+    instanceId: string;
+  }): Promise<{ data: Contato[]; total: number }> {
+    const { query, status, limit = 50, offset = 0, instanceId } = filters || ({} as any);
+
+    if (!instanceId && env.NODE_ENV === 'production') {
+      throw new Error('instanceId é estritamente obrigatório para listar contatos em produção.');
+    }
 
     if (isDbConnected()) {
       try {
         const conditions = [isNull(contatosTable.deletedAt)];
 
-        // Strict Instance Isolation
         if (instanceId) {
           conditions.push(eq(contatosTable.instanceId, instanceId));
         }
@@ -68,7 +69,7 @@ class ContatosRepository {
       }
     }
 
-    // Regra P0.7: Proibição estrita de fallback em produção
+    // Regra P0: Proibição estrita de fallback em produção
     if (env.NODE_ENV === 'production') {
       throw new Error('Banco de dados PostgreSQL indisponível. Operação interrompida em produção.');
     }
@@ -98,7 +99,11 @@ class ContatosRepository {
     return { data: paginated, total };
   }
 
-  async getById(id: string, instanceId?: string): Promise<Contato | null> {
+  async getById(id: string, instanceId: string): Promise<Contato | null> {
+    if (!instanceId && env.NODE_ENV === 'production') {
+      throw new Error('instanceId é estritamente obrigatório para consultar contato em produção.');
+    }
+
     if (isDbConnected()) {
       try {
         const conditions = [eq(contatosTable.id, id), isNull(contatosTable.deletedAt)];
@@ -134,8 +139,11 @@ class ContatosRepository {
     return found || null;
   }
 
-  async create(contato: Contato, instanceId?: string): Promise<Contato> {
-    const finalInstanceId = instanceId || (contato as any).instanceId || env.INSTANCE_ID || 'inst-enlace-fibra-001';
+  async create(contato: Contato, instanceId: string): Promise<Contato> {
+    const finalInstanceId = instanceId || (contato as any).instanceId;
+    if (!finalInstanceId) {
+      throw new Error('instanceId é obrigatório para cadastrar contato.');
+    }
 
     if (isDbConnected()) {
       try {
@@ -161,45 +169,69 @@ class ContatosRepository {
           createdAt: new Date(),
           updatedAt: new Date()
         });
+
         return contato;
       } catch (err: any) {
         if (env.NODE_ENV === 'production') {
-          throw new Error(`Falha no banco de dados ao criar contato em produção: ${err.message}`);
+          throw new Error(`Falha ao persistir contato no banco de dados em produção: ${err.message}`);
         }
-        console.warn('[ContatosRepository] Erro ao persistir contato no Postgres:', err.message);
+        console.warn('[ContatosRepository] Erro ao criar contato no Postgres:', err.message);
       }
     }
 
     if (env.NODE_ENV === 'production') {
-      throw new Error('Banco de dados PostgreSQL indisponível. Impossível salvar contato em produção.');
+      throw new Error('Banco de dados PostgreSQL indisponível. Operação interrompida em produção.');
     }
 
-    this.fallbackContatos.unshift({ ...contato, instanceId: finalInstanceId });
+    const record = { ...contato, instanceId: finalInstanceId };
+    this.fallbackContatos.unshift(record);
     return contato;
   }
 
-  async update(id: string, partial: Partial<Contato>, instanceId?: string): Promise<Contato | null> {
+  async update(id: string, partial: Partial<Contato>, instanceId: string): Promise<Contato> {
+    if (!instanceId && env.NODE_ENV === 'production') {
+      throw new Error('instanceId é obrigatório para atualizar contato em produção.');
+    }
+
     if (isDbConnected()) {
       try {
         const updateValues: Record<string, any> = { updatedAt: new Date() };
+
         if (partial.nome !== undefined) updateValues.nome = partial.nome;
+        if (partial.cpfCnpj !== undefined) updateValues.cpfCnpj = partial.cpfCnpj;
         if (partial.telefone !== undefined) updateValues.telefone = partial.telefone;
         if (partial.email !== undefined) updateValues.email = partial.email;
+        if (partial.cep !== undefined) updateValues.cep = partial.cep;
+        if (partial.logradouro !== undefined) updateValues.logradouro = partial.logradouro;
+        if (partial.numero !== undefined) updateValues.numero = partial.numero;
+        if (partial.complemento !== undefined) updateValues.complemento = partial.complemento;
+        if (partial.bairro !== undefined) updateValues.bairro = partial.bairro;
+        if (partial.cidade !== undefined) updateValues.cidade = partial.cidade;
+        if (partial.uf !== undefined) updateValues.uf = partial.uf;
         if (partial.status !== undefined) updateValues.status = partial.status;
+        if (partial.tags !== undefined) updateValues.tags = partial.tags;
         if (partial.scoreMaia !== undefined) updateValues.scoreMaia = partial.scoreMaia;
         if (partial.resumoMaia !== undefined) updateValues.resumoMaia = partial.resumoMaia;
-        if (partial.tags !== undefined) updateValues.tags = partial.tags;
+        if (partial.origem !== undefined) updateValues.origem = partial.origem;
 
         const conditions = [eq(contatosTable.id, id), isNull(contatosTable.deletedAt)];
         if (instanceId) {
           conditions.push(eq(contatosTable.instanceId, instanceId));
         }
 
-        await db.update(contatosTable).set(updateValues).where(and(...conditions));
-        return this.getById(id, instanceId);
+        await db
+          .update(contatosTable)
+          .set(updateValues)
+          .where(and(...conditions));
+
+        const updated = await this.getById(id, instanceId);
+        if (!updated) {
+          throw new Error('Contato não encontrado ou não pertence a esta instância.');
+        }
+        return updated;
       } catch (err: any) {
         if (env.NODE_ENV === 'production') {
-          throw new Error(`Falha no banco de dados ao atualizar contato em produção: ${err.message}`);
+          throw new Error(`Falha ao atualizar contato no Postgres em produção: ${err.message}`);
         }
         console.warn('[ContatosRepository] Erro ao atualizar contato no Postgres:', err.message);
       }
@@ -210,15 +242,18 @@ class ContatosRepository {
     }
 
     const idx = this.fallbackContatos.findIndex(c => c.id === id && (!instanceId || c.instanceId === instanceId));
-    if (idx !== -1) {
-      this.fallbackContatos[idx] = { ...this.fallbackContatos[idx], ...partial };
-      return this.fallbackContatos[idx];
+    if (idx === -1) {
+      throw new Error('Contato não encontrado para atualização nesta instância.');
     }
-
-    return null;
+    this.fallbackContatos[idx] = { ...this.fallbackContatos[idx], ...partial };
+    return this.fallbackContatos[idx];
   }
 
-  async softDelete(id: string, instanceId?: string): Promise<boolean> {
+  async delete(id: string, instanceId: string): Promise<boolean> {
+    if (!instanceId && env.NODE_ENV === 'production') {
+      throw new Error('instanceId é obrigatório para remover contato em produção.');
+    }
+
     if (isDbConnected()) {
       try {
         const conditions = [eq(contatosTable.id, id)];
@@ -226,16 +261,17 @@ class ContatosRepository {
           conditions.push(eq(contatosTable.instanceId, instanceId));
         }
 
-        const res = await db
+        // Soft delete
+        await db
           .update(contatosTable)
           .set({ deletedAt: new Date() })
           .where(and(...conditions));
         return true;
       } catch (err: any) {
         if (env.NODE_ENV === 'production') {
-          throw new Error(`Falha no banco de dados ao excluir contato em produção: ${err.message}`);
+          throw new Error(`Falha ao remover contato no Postgres em produção: ${err.message}`);
         }
-        console.warn('[ContatosRepository] Erro ao soft-delete contato no Postgres:', err.message);
+        console.warn('[ContatosRepository] Erro ao remover contato no Postgres:', err.message);
       }
     }
 
@@ -245,7 +281,7 @@ class ContatosRepository {
 
     const idx = this.fallbackContatos.findIndex(c => c.id === id && (!instanceId || c.instanceId === instanceId));
     if (idx !== -1) {
-      (this.fallbackContatos[idx] as any).deletedAt = new Date().toISOString();
+      (this.fallbackContatos[idx] as any).deletedAt = new Date();
       return true;
     }
     return false;
@@ -269,9 +305,8 @@ class ContatosRepository {
       tags: (row.tags as string[]) || [],
       scoreMaia: row.scoreMaia || undefined,
       resumoMaia: row.resumoMaia || undefined,
-      origem: row.origem as any,
-      dataCadastro: row.createdAt ? row.createdAt.toISOString() : new Date().toISOString(),
-      ultimoContato: row.ultimoContato ? row.ultimoContato.toISOString() : undefined
+      origem: (row.origem as any) || 'SITE',
+      dataCadastro: row.createdAt ? row.createdAt.toISOString() : new Date().toISOString()
     };
   }
 }

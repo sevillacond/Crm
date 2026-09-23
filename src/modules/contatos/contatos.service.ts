@@ -1,6 +1,7 @@
-import { contatosRepository, ContatosFilter } from './contatos.repository.ts';
+import { contatosRepository } from './contatos.repository.ts';
 import { Contato } from '../../types/index.ts';
 import { auditoriaService } from '../auditoria/auditoria.service.ts';
+import { ActorContext } from '../auth/actorContext.ts';
 
 export interface CreateContatoInput {
   nome: string;
@@ -20,17 +21,23 @@ export interface CreateContatoInput {
 }
 
 class ContatosService {
-  async listContatos(filters: ContatosFilter) {
-    return contatosRepository.findMany(filters);
+  async listContatos(filters: {
+    query?: string;
+    status?: string;
+    limit?: number;
+    offset?: number;
+    instanceId: string;
+  }) {
+    return contatosRepository.list(filters);
   }
 
-  async getContatoById(id: string, instanceId?: string): Promise<Contato | null> {
+  async getContatoById(id: string, instanceId: string): Promise<Contato | null> {
     return contatosRepository.getById(id, instanceId);
   }
 
   async createContato(
     input: CreateContatoInput,
-    actor: { id: string; name: string; role: any; instanceId?: string }
+    actor: ActorContext
   ): Promise<Contato> {
     const newId = `ct_${Date.now().toString().slice(-6)}`;
     const novoContato: Contato = {
@@ -56,7 +63,7 @@ class ContatosService {
 
     await auditoriaService.logEvent({
       instanceId: actor.instanceId,
-      actorId: actor.id,
+      actorId: actor.userId,
       actorName: actor.name,
       actorRole: actor.role,
       action: 'CONTATO_CREATED',
@@ -72,7 +79,7 @@ class ContatosService {
   async updateContato(
     id: string,
     partial: Partial<Contato>,
-    actor: { id: string; name: string; role: any; instanceId?: string }
+    actor: ActorContext
   ): Promise<Contato | null> {
     const previous = await contatosRepository.getById(id, actor.instanceId);
     if (!previous) return null;
@@ -81,7 +88,7 @@ class ContatosService {
 
     await auditoriaService.logEvent({
       instanceId: actor.instanceId,
-      actorId: actor.id,
+      actorId: actor.userId,
       actorName: actor.name,
       actorRole: actor.role,
       action: 'CONTATO_UPDATED',
@@ -97,16 +104,16 @@ class ContatosService {
 
   async deleteContato(
     id: string,
-    actor: { id: string; name: string; role: any; instanceId?: string }
+    actor: ActorContext
   ): Promise<boolean> {
     const previous = await contatosRepository.getById(id, actor.instanceId);
     if (!previous) return false;
 
-    const deleted = await contatosRepository.softDelete(id, actor.instanceId);
+    const deleted = await contatosRepository.delete(id, actor.instanceId);
 
     await auditoriaService.logEvent({
       instanceId: actor.instanceId,
-      actorId: actor.id,
+      actorId: actor.userId,
       actorName: actor.name,
       actorRole: actor.role,
       action: 'CONTATO_DELETED',

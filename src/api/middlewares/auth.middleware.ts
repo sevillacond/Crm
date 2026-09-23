@@ -2,12 +2,14 @@ import { Request, Response, NextFunction } from 'express';
 import { authService } from '../../modules/auth/auth.service.ts';
 import { usersRepository } from '../../modules/users/users.repository.ts';
 import { User } from '../../types/index.ts';
+import { ActorContext, createActorContext } from '../../modules/auth/actorContext.ts';
 
 declare global {
   namespace Express {
     interface Request {
       user?: User;
       instanceId?: string;
+      actor?: ActorContext;
       requestId?: string;
       token?: string;
     }
@@ -17,7 +19,7 @@ declare global {
 export async function authMiddleware(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
 
-  // Proibição: Rejeitar explicitamente cabeçalhos de bypass de identidade
+  // Proibição: Rejeitar explicitamente qualquer tentativa do frontend de injetar identidade
   if (
     req.headers['x-user-id'] ||
     req.headers['x-user-role'] ||
@@ -54,13 +56,33 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
       return;
     }
 
-    if (dbUser.status === 'OFFLINE' && false) {
-      // Inactive check if needed
+    const effectiveInstanceId = dbUser.instanceId || payload.instanceId;
+    if (!effectiveInstanceId) {
+      res.status(401).json({
+        error: {
+          code: 'MISSING_INSTANCE_CONTEXT',
+          message: 'Usuário autenticado não possui vínculo com nenhuma instância válida.'
+        }
+      });
+      return;
     }
 
-    // Attach verified user, instance context, and token
+    // Consolidated ActorContext (Section 4)
+    const actor = createActorContext(
+      {
+        ...dbUser,
+        instanceId: effectiveInstanceId
+      },
+      {
+        ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress,
+        userAgent: req.headers['user-agent'] as string,
+        requestId: req.requestId
+      }
+    );
+
     req.user = dbUser;
-    req.instanceId = dbUser.instanceId || payload.instanceId;
+    req.instanceId = effectiveInstanceId;
+    req.actor = actor;
     req.token = token;
 
     next();

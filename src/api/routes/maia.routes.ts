@@ -12,10 +12,12 @@ router.get(
   authMiddleware,
   requirePermission('maia:use'),
   (req: Request, res: Response) => {
+    const nivel = maiaPolicyEngine.getNivel(req.actor!.instanceId);
     res.json({
-      nivelAutonomia: maiaPolicyEngine.getNivel(),
+      nivelAutonomia: nivel,
       versao: 'MaIA v2.4 (Policy Engine & Cryptographic Audit Isolated)',
-      status: maiaPolicyEngine.getNivel() === 0 ? 'DESATIVADA' : 'OPERACIONAL'
+      status: nivel === 0 ? 'DESATIVADA' : 'OPERACIONAL',
+      instanceId: req.actor!.instanceId
     });
   }
 );
@@ -25,14 +27,14 @@ router.post(
   '/autonomia',
   authMiddleware,
   requirePermission('maia:configure'),
-  (req: Request, res: Response) => {
+  async (req: Request, res: Response) => {
     const { nivel } = req.body;
     if (typeof nivel !== 'number' || nivel < 0 || nivel > 4) {
       res.status(400).json({ error: { code: 'INVALID_AUTONOMY_LEVEL', message: 'Nível deve ser entre 0 e 4' } });
       return;
     }
-    maiaPolicyEngine.setNivel(nivel as MaiaNivelAutonomia);
-    res.json({ nivelAutonomia: nivel, status: 'Atualizado com sucesso' });
+    await maiaPolicyEngine.setNivel(nivel as MaiaNivelAutonomia, req.actor!.instanceId);
+    res.json({ nivelAutonomia: nivel, instanceId: req.actor!.instanceId, status: 'Atualizado e persistido com sucesso' });
   }
 );
 
@@ -48,8 +50,7 @@ router.post(
         res.status(400).json({ error: { code: 'MISSING_PROMPT', message: 'Prompt é obrigatório' } });
         return;
       }
-      const actor = req.user!;
-      const output = await maiaService.processPrompt({ prompt, dealId, contatoId }, actor);
+      const output = await maiaService.processPrompt({ prompt, dealId, contatoId }, req.actor!);
       res.json(output);
     } catch (err) {
       next(err);

@@ -14,7 +14,7 @@ router.get(
   requirePermission('deals:read'),
   async (req: Request, res: Response, next) => {
     try {
-      const deals = await dealsService.listDeals(req.instanceId);
+      const deals = await dealsService.listDeals(req.actor!.instanceId);
       res.json(deals);
     } catch (err) {
       next(err);
@@ -29,9 +29,9 @@ router.get(
   requirePermission('deals:read'),
   async (req: Request, res: Response, next) => {
     try {
-      const deal = await dealsService.getDealById(req.params.id, req.instanceId);
+      const deal = await dealsService.getDealById(req.params.id, req.actor!.instanceId);
       if (!deal) {
-        res.status(404).json({ error: { code: 'DEAL_NOT_FOUND', message: 'Negócio não encontrado' } });
+        res.status(404).json({ error: { code: 'DEAL_NOT_FOUND', message: 'Negócio não encontrado na instância' } });
         return;
       }
       res.json(deal);
@@ -48,7 +48,12 @@ router.get(
   requirePermission('deals:read'),
   async (req: Request, res: Response, next) => {
     try {
-      const history = await dealsService.getDealHistory(req.params.id);
+      const deal = await dealsService.getDealById(req.params.id, req.actor!.instanceId);
+      if (!deal) {
+        res.status(404).json({ error: { code: 'DEAL_NOT_FOUND', message: 'Negócio não encontrado na instância' } });
+        return;
+      }
+      const history = await dealsService.getDealHistory(req.params.id, req.actor!.instanceId);
       res.json(history);
     } catch (err) {
       next(err);
@@ -64,8 +69,7 @@ router.post(
   validateBody(createDealSchema),
   async (req: Request, res: Response, next) => {
     try {
-      const actor = req.user!;
-      const deal = await dealsService.createDeal(req.body, actor);
+      const deal = await dealsService.createDeal(req.body, req.actor!);
       res.status(201).json(deal);
     } catch (err) {
       next(err);
@@ -81,12 +85,11 @@ router.patch(
   validateBody(updateDealStageSchema),
   async (req: Request, res: Response, next) => {
     try {
-      const actor = req.user!;
       const { etapa, motivo } = req.body;
-      const updated = await dealsService.moveStage(req.params.id, etapa, actor, motivo);
+      const updated = await dealsService.moveStage(req.params.id, etapa, req.actor!, motivo);
       res.json(updated);
     } catch (err: any) {
-      if (err.message === 'Negócio não encontrado') {
+      if (err.message.includes('não encontrado')) {
         res.status(404).json({ error: { code: 'DEAL_NOT_FOUND', message: err.message } });
         return;
       }

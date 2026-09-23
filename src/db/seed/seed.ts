@@ -13,7 +13,19 @@ import {
 } from '../../data/mockData.ts';
 
 export async function bootstrapProduction(client: any): Promise<void> {
-  const instanceId = env.INSTANCE_ID || 'inst-enlace-fibra-001';
+  if (env.NODE_ENV === 'production') {
+    if (!env.INSTANCE_ID) {
+      throw new Error('[FATAL] INSTANCE_ID é estritamente obrigatória em ambiente de produção para o bootstrap da instância.');
+    }
+    if (!process.env.ADMIN_INITIAL_PASSWORD) {
+      throw new Error('[FATAL] ADMIN_INITIAL_PASSWORD é estritamente obrigatória em ambiente de produção. Nenhuma senha default é permitida.');
+    }
+  }
+
+  const instanceId = env.INSTANCE_ID || (env.NODE_ENV !== 'production' ? 'inst-dev-local-001' : '');
+  if (!instanceId) {
+    throw new Error('[FATAL] instanceId inválido para bootstrap.');
+  }
   console.log(`[BOOTSTRAP-PROD] Executando bootstrap essencial para a instância: ${instanceId}`);
 
   // 1. Roles
@@ -83,9 +95,12 @@ export async function bootstrapProduction(client: any): Promise<void> {
     ]
   );
 
-  // 4. Initial Root Administrator (Never hardcoded in production)
+  // 4. Initial Root Administrator (Never hardcoded or default in production)
   const adminEmail = (process.env.ADMIN_INITIAL_EMAIL || 'admin@enlace.net.br').toLowerCase().trim();
-  const adminPassword = process.env.ADMIN_INITIAL_PASSWORD || 'MudarUrgente@2026!';
+  const adminPassword = process.env.ADMIN_INITIAL_PASSWORD || (env.NODE_ENV !== 'production' ? 'DevAdmin@2026!' : '');
+  if (!adminPassword) {
+    throw new Error('[FATAL] ADMIN_INITIAL_PASSWORD não informada para criação do administrador raiz.');
+  }
   const adminHash = await bcrypt.hash(adminPassword, 12);
 
   await client.query(

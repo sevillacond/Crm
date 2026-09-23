@@ -20,7 +20,7 @@ router.get(
       const offset = req.query.offset ? Number(req.query.offset) : 0;
 
       const result = await contatosService.listContatos({
-        instanceId: req.instanceId,
+        instanceId: req.actor!.instanceId,
         query,
         status,
         limit,
@@ -40,9 +40,9 @@ router.get(
   requirePermission('contatos:read'),
   async (req: Request, res: Response, next) => {
     try {
-      const contato = await contatosService.getContatoById(req.params.id, req.instanceId);
+      const contato = await contatosService.getContatoById(req.params.id, req.actor!.instanceId);
       if (!contato) {
-        res.status(404).json({ error: { code: 'CONTACT_NOT_FOUND', message: 'Contato não encontrado' } });
+        res.status(404).json({ error: { code: 'CONTACT_NOT_FOUND', message: 'Contato não encontrado na instância' } });
         return;
       }
       res.json(contato);
@@ -60,8 +60,7 @@ router.post(
   validateBody(createContatoSchema),
   async (req: Request, res: Response, next) => {
     try {
-      const actor = req.user!;
-      const novoContato = await contatosService.createContato(req.body, actor);
+      const novoContato = await contatosService.createContato(req.body, req.actor!);
       res.status(201).json(novoContato);
     } catch (err) {
       next(err);
@@ -77,10 +76,9 @@ router.patch(
   validateBody(updateContatoSchema),
   async (req: Request, res: Response, next) => {
     try {
-      const actor = req.user!;
-      const updated = await contatosService.updateContato(req.params.id, req.body, actor);
+      const updated = await contatosService.updateContato(req.params.id, req.body, req.actor!);
       if (!updated) {
-        res.status(404).json({ error: { code: 'CONTACT_NOT_FOUND', message: 'Contato não encontrado' } });
+        res.status(404).json({ error: { code: 'CONTACT_NOT_FOUND', message: 'Contato não encontrado na instância' } });
         return;
       }
       res.json(updated);
@@ -97,10 +95,9 @@ router.delete(
   requirePermission('contatos:delete'),
   async (req: Request, res: Response, next) => {
     try {
-      const actor = req.user!;
-      const success = await contatosService.deleteContato(req.params.id, actor);
+      const success = await contatosService.deleteContato(req.params.id, req.actor!);
       if (!success) {
-        res.status(404).json({ error: { code: 'CONTACT_NOT_FOUND', message: 'Contato não encontrado' } });
+        res.status(404).json({ error: { code: 'CONTACT_NOT_FOUND', message: 'Contato não encontrado na instância' } });
         return;
       }
       res.json({ status: 'ok', message: 'Contato excluído com sucesso.' });

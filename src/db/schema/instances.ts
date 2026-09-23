@@ -14,6 +14,7 @@ export const instancesTable = pgTable('instances', {
   totalCtos: integer('total_ctos').notNull().default(0),
   totalPortasDisponiveis: integer('total_portas_disponiveis').notNull().default(0),
   versaoMaia: varchar('versao_maia', { length: 64 }).notNull().default('MaIA v3.8 Flash (Tool Gateway RBAC)'),
+  maiaNivelAutonomia: integer('maia_nivel_autonomia').notNull().default(3),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
 });

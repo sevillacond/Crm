@@ -1,41 +1,41 @@
-import { ViabilidadeQuery, ViabilidadeResult, IViabilidadeAdapter } from './viabilidade.interface.ts';
-import { auditoriaService } from '../auditoria/auditoria.service.ts';
+import {
+  IViabilidadeAdapter,
+  ViabilidadeQuery,
+  ViabilidadeResult
+} from './viabilidade.interface.ts';
 import { contatosRepository } from '../contatos/contatos.repository.ts';
-import { dealsRepository } from '../deals/deals.repository.ts';
+import { auditoriaService } from '../auditoria/auditoria.service.ts';
 
-class DemoViabilidadeAdapter implements IViabilidadeAdapter {
+export class ViabilidadeSimuladaAdapter implements IViabilidadeAdapter {
   async consultar(query: ViabilidadeQuery): Promise<ViabilidadeResult> {
-    const cleanCep = (query.cep || '').replace(/\D/g, '');
-    const cleanNum = (query.numero || '1').replace(/\D/g, '');
-
-    // Deterministic simulation hash for sandbox demonstration
-    const hash = (cleanCep + cleanNum).split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    const isViavel = hash % 5 !== 0; // 80% viavel
-    const dist = isViavel ? 20 + (hash % 85) : 340;
-    const ctoId = isViavel ? `CTO-DEMO-${(query.bairro || 'CAM').substring(0, 3).toUpperCase()}-${String(hash % 99).padStart(3, '0')}` : undefined;
-    const portas = isViavel ? 2 + (hash % 10) : 0;
+    const num = parseInt(query.numero.replace(/\D/g, '') || '0', 10);
+    const isEven = num % 2 === 0;
 
     return {
       modoExecucao: 'MOCK_DEMO_SIMULADO',
       isEstimativaHeuristica: true,
-      avisoLegal: '[SIMULAÇÃO MOCK/DEMO] Resultado estimado para demonstração de fluxo. Não representa garantia técnica de cobertura até integração com GIS/CTO da operadora.',
+      avisoLegal: '[AVISO DE GOVERNANÇA] Modo estimativa simulada sandbox para demonstração técnica.',
       cep: query.cep,
       numero: query.numero,
-      bairro: query.bairro || 'Centro',
-      viavel: isViavel,
-      ctoId,
-      distanciaMetros: dist,
-      portasLivres: portas,
-      tecnologiaDisponivel: isViavel ? 'FTTH GPON (Estimativa Demo)' : 'Sem viabilidade óptica imediata (Demo)',
-      observacao: isViavel
-        ? `[ESTIMATIVA DEMO] CTO ${ctoId} a aproximadamente ${dist}m de distância estimada.`
-        : '[ESTIMATIVA DEMO] Sem viabilidade imediata. Requer vistoria técnica de campo.'
+      bairro: query.bairro || 'Bairro Central',
+      viavel: isEven,
+      ctoId: isEven ? 'CTO-CAMP-04' : undefined,
+      distanciaMetros: isEven ? 55 : undefined,
+      portasLivres: isEven ? 4 : 0,
+      tecnologiaDisponivel: 'FTTH GPON 2.5 Gbps',
+      observacao: isEven
+        ? 'Viabilidade técnica positiva com CTO a 55 metros.'
+        : 'Inviável no momento por esgotamento de portas na caixa de atendimento.'
     };
   }
 }
 
 class ViabilidadeService {
-  private adapter: IViabilidadeAdapter = new DemoViabilidadeAdapter();
+  private adapter: IViabilidadeAdapter;
+
+  constructor() {
+    this.adapter = new ViabilidadeSimuladaAdapter();
+  }
 
   setAdapter(adapter: IViabilidadeAdapter) {
     this.adapter = adapter;
@@ -44,22 +44,27 @@ class ViabilidadeService {
   async consultar(
     query: ViabilidadeQuery,
     contatoId?: string,
-    actor?: { id: string; name: string; role: any; isMaia?: boolean }
+    actor?: { id: string; name: string; role: any; instanceId?: string; isMaia?: boolean }
   ): Promise<ViabilidadeResult> {
     const result = await this.adapter.consultar(query);
 
     // If associated with a contact or deal, reflect feasibility state
-    if (contatoId) {
-      const contato = await contatosRepository.getById(contatoId);
+    if (contatoId && actor?.instanceId) {
+      const contato = await contatosRepository.getById(contatoId, actor.instanceId);
       if (contato) {
-        await contatosRepository.update(contatoId, {
-          status: result.viavel ? 'VIAVEL' : 'INVIAVEL'
-        });
+        await contatosRepository.update(
+          contatoId,
+          {
+            status: result.viavel ? 'VIAVEL' : 'INVIAVEL'
+          },
+          actor.instanceId
+        );
       }
     }
 
     if (actor) {
       await auditoriaService.logEvent({
+        instanceId: actor.instanceId,
         actorId: actor.id,
         actorName: actor.name,
         actorRole: actor.role,

@@ -2,7 +2,7 @@ export type Role = 'ADMIN' | 'SUPERVISOR' | 'ATENDENTE' | 'TECNICO' | 'MAIA_AGEN
 
 export interface User {
   id: string;
-  instanceId?: string;
+  instanceId: string;
   name: string;
   email: string;
   role: Role;
@@ -25,6 +25,7 @@ export interface InstanceConfig {
   totalCtos: number;
   totalPortasDisponiveis: number;
   versaoMaia: string;
+  maiaNivelAutonomia?: number;
 }
 
 export interface Plano {

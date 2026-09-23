@@ -1,38 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
-import Redis from 'ioredis';
 import { env } from '../../config/env.ts';
+import { getRedisClient, isRedisConnected } from '../../shared/redis.ts';
 
-let redisClient: Redis | null = null;
-let isRedisAvailable = false;
-
-if (env.REDIS_URL || process.env.REDIS_HOST) {
-  try {
-    const redisUrl = env.REDIS_URL || `redis://${process.env.REDIS_HOST || '127.0.0.1'}:${process.env.REDIS_PORT || 6379}`;
-    redisClient = new Redis(redisUrl, {
-      maxRetriesPerRequest: 1,
-      connectTimeout: 2000,
-      lazyConnect: true
-    });
-
-    redisClient.connect()
-      .then(() => {
-        isRedisAvailable = true;
-        console.log('[Redis] Conectado com sucesso para Rate Limiting distribuído.');
-      })
-      .catch((err) => {
-        isRedisAvailable = false;
-        console.warn('[Redis] Indisponível para rate limiting, utilizando rate limiter em memória:', err.message);
-      });
-
-    redisClient.on('error', () => {
-      isRedisAvailable = false;
-    });
-  } catch (err: any) {
-    console.warn('[Redis] Falha de inicialização:', err.message);
-  }
-}
-
-// Memory fallback store
+// Memory fallback store (Defense in depth)
 const memoryStores = new Map<string, Map<string, { count: number; resetAt: number }>>();
 
 export function createRateLimiter(options: {
@@ -40,9 +10,10 @@ export function createRateLimiter(options: {
   windowMs: number;
   max: number;
   message?: string;
+  failClosedInProduction?: boolean;
   keyGenerator?: (req: Request) => string;
 }) {
-  const { name, windowMs, max, message } = options;
+  const { name, windowMs, max, message, failClosedInProduction = false } = options;
   if (!memoryStores.has(name)) {
     memoryStores.set(name, new Map());
   }
@@ -54,16 +25,19 @@ export function createRateLimiter(options: {
     const windowSeconds = Math.ceil(windowMs / 1000);
 
     // 1. Try Redis first if available
-    if (isRedisAvailable && redisClient) {
+    const redis = getRedisClient();
+    const redisActive = isRedisConnected() && redis;
+
+    if (redisActive) {
       try {
         const redisKey = `ratelimit:${name}:${key}`;
-        const current = await redisClient.incr(redisKey);
+        const current = await redis.incr(redisKey);
         if (current === 1) {
-          await redisClient.expire(redisKey, windowSeconds);
+          await redis.expire(redisKey, windowSeconds);
         }
 
         if (current > max) {
-          const ttl = await redisClient.ttl(redisKey);
+          const ttl = await redis.ttl(redisKey);
           res.set('Retry-After', String(ttl > 0 ? ttl : windowSeconds));
           res.status(429).json({
             error: {
@@ -78,11 +52,22 @@ export function createRateLimiter(options: {
         res.set('X-RateLimit-Remaining', String(Math.max(0, max - current)));
         return next();
       } catch (err) {
-        // Fall through to memory store if Redis query fails
+        console.warn(`[RateLimiter:${name}] Erro ao consultar Redis:`, err);
       }
     }
 
-    // 2. Memory store fallback
+    // 2. Política de Falha Fechada (FAIL CLOSED) em Produção para Operações Críticas
+    if (failClosedInProduction && env.NODE_ENV === 'production' && !redisActive && env.REDIS_URL) {
+      res.status(503).json({
+        error: {
+          code: 'RATE_LIMITER_FAIL_CLOSED',
+          message: 'Serviço de autenticação temporariamente restrito por política de segurança de contenção (Redis indisponível).'
+        }
+      });
+      return;
+    }
+
+    // 3. Fallback de Memória Local com Janela Deslizante (Defesa em Profundidade)
     const now = Date.now();
     const entry = store.get(key);
 
@@ -117,6 +102,7 @@ export const loginRateLimiter = createRateLimiter({
   name: 'auth_login',
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 10,
+  failClosedInProduction: true, // FAIL CLOSED se Redis configurado e indisponível em produção
   message: 'Muitas tentativas de login a partir deste IP. Bloqueado temporariamente por 15 minutos.'
 });
 
@@ -124,6 +110,7 @@ export const apiGeneralRateLimiter = createRateLimiter({
   name: 'api_general',
   windowMs: 60 * 1000, // 1 minute
   max: 300,
+  failClosedInProduction: false,
   message: 'Limite geral de tráfego na API excedido.'
 });
 
@@ -131,6 +118,7 @@ export const maiaRateLimiter = createRateLimiter({
   name: 'maia_copilot',
   windowMs: 60 * 1000, // 1 minute
   max: 30,
+  failClosedInProduction: false,
   message: 'Limite de consultas simultâneas ao copiloto MaIA excedido.',
   keyGenerator: (req) => `${req.user?.id || req.ip}`
 });
@@ -139,5 +127,6 @@ export const viabilidadeRateLimiter = createRateLimiter({
   name: 'viabilidade_consulta',
   windowMs: 60 * 1000, // 1 minute
   max: 30,
+  failClosedInProduction: false,
   message: 'Limite de consultas de viabilidade por minuto excedido.'
 });

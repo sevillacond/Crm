@@ -5,7 +5,7 @@ import { INITIAL_INSTANCE } from '../../data/mockData.ts';
 import { InstanceConfig } from '../../types/index.ts';
 
 class InstancesRepository {
-  private fallbackInstance: InstanceConfig = { ...INITIAL_INSTANCE };
+  private fallbackInstance: InstanceConfig = { ...INITIAL_INSTANCE, maiaNivelAutonomia: 3 };
 
   async getById(id: string): Promise<InstanceConfig | null> {
     if (isDbConnected()) {
@@ -40,14 +40,15 @@ class InstancesRepository {
     this.fallbackInstance = { ...this.fallbackInstance, ...partial };
     if (isDbConnected()) {
       try {
+        const updateValues: Record<string, any> = { updatedAt: new Date() };
+        if (partial.nomeFantasia !== undefined) updateValues.nomeFantasia = partial.nomeFantasia;
+        if (partial.cidadeSede !== undefined) updateValues.cidadeSede = partial.cidadeSede;
+        if (partial.totalCtos !== undefined) updateValues.totalCtos = partial.totalCtos;
+        if (partial.totalPortasDisponiveis !== undefined) updateValues.totalPortasDisponiveis = partial.totalPortasDisponiveis;
+        if (partial.maiaNivelAutonomia !== undefined) updateValues.maiaNivelAutonomia = partial.maiaNivelAutonomia;
+
         await db.update(instancesTable)
-          .set({
-            nomeFantasia: partial.nomeFantasia,
-            cidadeSede: partial.cidadeSede,
-            totalCtos: partial.totalCtos,
-            totalPortasDisponiveis: partial.totalPortasDisponiveis,
-            updatedAt: new Date()
-          })
+          .set(updateValues)
           .where(eq(instancesTable.id, id));
       } catch (err: any) {
         console.warn('[InstancesRepository] Falha ao persistir update de instância no Postgres:', err.message);
@@ -70,7 +71,8 @@ class InstancesRepository {
       sgpIntegrado: row.sgpIntegrado as any,
       totalCtos: row.totalCtos,
       totalPortasDisponiveis: row.totalPortasDisponiveis,
-      versaoMaia: row.versaoMaia
+      versaoMaia: row.versaoMaia,
+      maiaNivelAutonomia: row.maiaNivelAutonomia ?? 3
     };
   }
 }

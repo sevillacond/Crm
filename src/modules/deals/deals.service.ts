@@ -1,6 +1,7 @@
 import { dealsRepository, DealHistoryEntry } from './deals.repository.ts';
 import { Deal, DealEtapa } from '../../types/index.ts';
 import { auditoriaService } from '../auditoria/auditoria.service.ts';
+import { ActorContext } from '../auth/actorContext.ts';
 
 export interface CreateDealInput {
   titulo: string;
@@ -27,17 +28,17 @@ const STAGE_PROBABILITIES: Record<DealEtapa, number> = {
 };
 
 class DealsService {
-  async listDeals(instanceId?: string): Promise<Deal[]> {
-    return dealsRepository.getAll(instanceId);
+  async listDeals(instanceId: string): Promise<Deal[]> {
+    return dealsRepository.list(instanceId);
   }
 
-  async getDealById(id: string, instanceId?: string): Promise<Deal | null> {
+  async getDealById(id: string, instanceId: string): Promise<Deal | null> {
     return dealsRepository.getById(id, instanceId);
   }
 
   async createDeal(
     input: CreateDealInput,
-    actor: { id: string; name: string; role: any; instanceId?: string }
+    actor: ActorContext
   ): Promise<Deal> {
     const newId = `dl_${Date.now().toString().slice(-6)}`;
     const etapa = input.etapa || 'NOVO_LEAD';
@@ -55,7 +56,7 @@ class DealsService {
       taxaAdesao: Number(input.taxaAdesao) || 0,
       probabilidade,
       dataPrevisao: input.dataPrevisao || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
-      responsavelId: input.responsavelId || actor.id,
+      responsavelId: input.responsavelId || actor.userId,
       statusViabilidade: input.statusViabilidade || 'PENDENTE',
       notas: input.nota ? [input.nota] : [],
       createdAt: new Date().toISOString(),
@@ -66,7 +67,7 @@ class DealsService {
 
     await auditoriaService.logEvent({
       instanceId: actor.instanceId,
-      actorId: actor.id,
+      actorId: actor.userId,
       actorName: actor.name,
       actorRole: actor.role,
       action: 'DEAL_CREATED',
@@ -82,23 +83,21 @@ class DealsService {
   async moveStage(
     id: string,
     targetStage: DealEtapa,
-    actor: { id: string; name: string; role: any; instanceId?: string },
+    actor: ActorContext,
     motivo?: string
   ): Promise<Deal> {
     const existing = await dealsRepository.getById(id, actor.instanceId);
     if (!existing) {
-      throw new Error('Negócio não encontrado');
+      throw new Error('Negócio não encontrado na instância');
     }
 
     const oldStage = existing.etapa;
-    const probabilidade = STAGE_PROBABILITIES[targetStage] ?? existing.probabilidade;
 
     const updated = await dealsRepository.updateStage(
       id,
       targetStage,
-      probabilidade,
-      actor.id,
       actor.instanceId,
+      actor.userId,
       motivo
     );
 
@@ -108,22 +107,22 @@ class DealsService {
 
     await auditoriaService.logEvent({
       instanceId: actor.instanceId,
-      actorId: actor.id,
+      actorId: actor.userId,
       actorName: actor.name,
       actorRole: actor.role,
       action: 'DEAL_STAGE_UPDATED',
       entityType: 'DEAL',
       entityId: id,
-      details: `Negócio "${existing.titulo}" movido de [${oldStage}] para [${targetStage}]. Probabilidade ajustada para ${probabilidade}%.`,
+      details: `Negócio "${existing.titulo}" movido de [${oldStage}] para [${targetStage}].`,
       dadosAnteriores: { etapa: oldStage, probabilidade: existing.probabilidade },
-      dadosPosteriores: { etapa: targetStage, probabilidade, motivo }
+      dadosPosteriores: { etapa: targetStage, motivo }
     });
 
     return updated;
   }
 
-  async getDealHistory(dealId: string): Promise<DealHistoryEntry[]> {
-    return dealsRepository.getHistoryByDealId(dealId);
+  async getDealHistory(dealId: string, instanceId: string): Promise<DealHistoryEntry[]> {
+    return dealsRepository.getHistoryByDealId(dealId, instanceId);
   }
 }
 

@@ -2,7 +2,7 @@ import { usersRepository } from './users.repository.ts';
 import { User } from '../../types/index.ts';
 
 class UsersService {
-  async getAll(instanceId?: string): Promise<User[]> {
+  async getAll(instanceId: string): Promise<User[]> {
     return usersRepository.getAll(instanceId);
   }
 

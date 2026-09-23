@@ -11,13 +11,30 @@ export interface UserWithAuth extends User {
 }
 
 class UsersRepository {
-  private fallbackUsers: (UserWithAuth & { instanceId?: string })[] = INITIAL_USERS.map(u => ({
-    ...u,
-    instanceId: 'inst-enlace-fibra-001',
-    passwordHash: '$2a$10$iMh.OQf9n1q4T7E14y17c.yJb6R6yJ7G8n9k.Wz1e9c2b3d4e5f6g'
-  }));
+  private fallbackUsers: (UserWithAuth & { instanceId?: string })[] = [
+    {
+      id: 'usr_root_admin',
+      name: 'Administrador Enlace',
+      email: 'admin@enlace.net.br',
+      role: 'ADMIN',
+      avatar: '',
+      department: 'Tecnologia',
+      status: 'ONLINE',
+      instanceId: 'inst-enlace-fibra-001',
+      passwordHash: bcrypt.hashSync('Enlace@2026!', 10)
+    },
+    ...INITIAL_USERS.map(u => ({
+      ...u,
+      instanceId: 'inst-enlace-fibra-001',
+      passwordHash: bcrypt.hashSync('Enlace@2026!', 10)
+    }))
+  ];
 
-  async getAll(instanceId?: string): Promise<User[]> {
+  async getAll(instanceId: string): Promise<User[]> {
+    if (!instanceId && env.NODE_ENV === 'production') {
+      throw new Error('instanceId é estritamente obrigatório para consultar usuários em produção.');
+    }
+
     if (isDbConnected()) {
       try {
         const query = db.select().from(usersTable);
@@ -131,7 +148,11 @@ class UsersRepository {
   }
 
   async create(user: User, rawPassword?: string, instanceId?: string): Promise<User> {
-    const finalInstanceId = instanceId || user.instanceId || env.INSTANCE_ID || 'inst-enlace-fibra-001';
+    const finalInstanceId = instanceId || user.instanceId || env.INSTANCE_ID;
+    if (!finalInstanceId && env.NODE_ENV === 'production') {
+      throw new Error('instanceId é obrigatório para cadastrar usuário em produção.');
+    }
+    const resolvedInstanceId = finalInstanceId || 'inst-dev-local-001';
 
     if (!rawPassword && env.NODE_ENV === 'production') {
       throw new Error('A senha de usuário é obrigatória para cadastro em produção.');
@@ -141,13 +162,13 @@ class UsersRepository {
       ? await bcrypt.hash(rawPassword, 12)
       : await bcrypt.hash('Enlace@2026!', 10);
 
-    const fullUser: UserWithAuth = { ...user, instanceId: finalInstanceId, passwordHash };
+    const fullUser: UserWithAuth = { ...user, instanceId: resolvedInstanceId, passwordHash };
 
     if (isDbConnected()) {
       try {
         await db.insert(usersTable).values({
           id: user.id,
-          instanceId: finalInstanceId,
+          instanceId: resolvedInstanceId,
           name: user.name,
           email: user.email.toLowerCase().trim(),
           passwordHash,

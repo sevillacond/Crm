@@ -12,7 +12,7 @@ router.get(
   requirePermission('usuarios:read'),
   async (req: Request, res: Response, next) => {
     try {
-      const users = await usersService.getAll(req.instanceId);
+      const users = await usersService.getAll(req.actor!.instanceId);
       res.json(users);
     } catch (err) {
       next(err);
@@ -35,7 +35,7 @@ router.post(
       const newUser = await usersService.createUser(
         {
           id: `usr_${Date.now()}`,
-          instanceId: req.instanceId,
+          instanceId: req.actor!.instanceId,
           name,
           email,
           role,
@@ -44,7 +44,7 @@ router.post(
           status: 'OFFLINE'
         },
         password,
-        req.instanceId
+        req.actor!.instanceId
       );
       res.status(201).json(newUser);
     } catch (err) {
