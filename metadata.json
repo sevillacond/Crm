@@ -1,0 +1,6 @@
+{
+  "name": "Enlace-CRM",
+  "description": "CRM Omnichannel com IA MaIA para Provedores de Internet (ISP) com arquitetura de instância isolada.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
