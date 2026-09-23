@@ -2,12 +2,12 @@ import { planosRepository } from './planos.repository.ts';
 import { Plano } from '../../types/index.ts';
 
 class PlanosService {
-  async getAll(): Promise<Plano[]> {
-    return planosRepository.getAll();
+  async getAll(instanceId?: string): Promise<Plano[]> {
+    return planosRepository.getAll(instanceId);
   }
 
-  async getById(id: string): Promise<Plano | null> {
-    return planosRepository.getById(id);
+  async getById(id: string, instanceId?: string): Promise<Plano | null> {
+    return planosRepository.getById(id, instanceId);
   }
 }
 

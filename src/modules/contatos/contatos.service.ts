@@ -24,13 +24,13 @@ class ContatosService {
     return contatosRepository.findMany(filters);
   }
 
-  async getContatoById(id: string): Promise<Contato | null> {
-    return contatosRepository.getById(id);
+  async getContatoById(id: string, instanceId?: string): Promise<Contato | null> {
+    return contatosRepository.getById(id, instanceId);
   }
 
   async createContato(
     input: CreateContatoInput,
-    actor: { id: string; name: string; role: any }
+    actor: { id: string; name: string; role: any; instanceId?: string }
   ): Promise<Contato> {
     const newId = `ct_${Date.now().toString().slice(-6)}`;
     const novoContato: Contato = {
@@ -52,9 +52,10 @@ class ContatosService {
       dataCadastro: new Date().toISOString()
     };
 
-    const saved = await contatosRepository.create(novoContato);
+    const saved = await contatosRepository.create(novoContato, actor.instanceId);
 
     await auditoriaService.logEvent({
+      instanceId: actor.instanceId,
       actorId: actor.id,
       actorName: actor.name,
       actorRole: actor.role,
@@ -71,14 +72,15 @@ class ContatosService {
   async updateContato(
     id: string,
     partial: Partial<Contato>,
-    actor: { id: string; name: string; role: any }
+    actor: { id: string; name: string; role: any; instanceId?: string }
   ): Promise<Contato | null> {
-    const previous = await contatosRepository.getById(id);
+    const previous = await contatosRepository.getById(id, actor.instanceId);
     if (!previous) return null;
 
-    const updated = await contatosRepository.update(id, partial);
+    const updated = await contatosRepository.update(id, partial, actor.instanceId);
 
     await auditoriaService.logEvent({
+      instanceId: actor.instanceId,
       actorId: actor.id,
       actorName: actor.name,
       actorRole: actor.role,
@@ -95,14 +97,15 @@ class ContatosService {
 
   async deleteContato(
     id: string,
-    actor: { id: string; name: string; role: any }
+    actor: { id: string; name: string; role: any; instanceId?: string }
   ): Promise<boolean> {
-    const previous = await contatosRepository.getById(id);
+    const previous = await contatosRepository.getById(id, actor.instanceId);
     if (!previous) return false;
 
-    const deleted = await contatosRepository.softDelete(id);
+    const deleted = await contatosRepository.softDelete(id, actor.instanceId);
 
     await auditoriaService.logEvent({
+      instanceId: actor.instanceId,
       actorId: actor.id,
       actorName: actor.name,
       actorRole: actor.role,

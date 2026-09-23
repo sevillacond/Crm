@@ -1,25 +1,30 @@
 import { Router, Request, Response } from 'express';
 import { ordensService } from '../../modules/ordens/ordens.service.ts';
 import { authMiddleware } from '../middlewares/auth.middleware.ts';
-import { requireRole } from '../middlewares/rbac.middleware.ts';
+import { requirePermission } from '../middlewares/rbac.middleware.ts';
 
 const router = Router();
 
 // GET /api/ordens-servico
-router.get('/', authMiddleware, async (_req: Request, res: Response, next) => {
-  try {
-    const ordens = await ordensService.listAll();
-    res.json(ordens);
-  } catch (err) {
-    next(err);
+router.get(
+  '/',
+  authMiddleware,
+  requirePermission('ordens:read'),
+  async (req: Request, res: Response, next) => {
+    try {
+      const ordens = await ordensService.listAll(req.instanceId);
+      res.json(ordens);
+    } catch (err) {
+      next(err);
+    }
   }
-});
+);
 
 // PATCH /api/ordens-servico/:id/status
 router.patch(
   '/:id/status',
   authMiddleware,
-  requireRole(['ADMIN', 'SUPERVISOR', 'TECNICO']),
+  requirePermission('ordens:update'),
   async (req: Request, res: Response, next) => {
     try {
       const { status } = req.body;

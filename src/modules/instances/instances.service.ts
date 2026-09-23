@@ -2,7 +2,11 @@ import { instancesRepository } from './instances.repository.ts';
 import { InstanceConfig } from '../../types/index.ts';
 
 class InstancesService {
-  async getInstance(): Promise<InstanceConfig> {
+  async getInstance(id?: string): Promise<InstanceConfig> {
+    if (id) {
+      const inst = await instancesRepository.getById(id);
+      if (inst) return inst;
+    }
     return instancesRepository.getDefault();
   }
 

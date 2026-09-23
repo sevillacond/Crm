@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { viabilidadeService } from '../../modules/viabilidade/viabilidade.service.ts';
 import { authMiddleware } from '../middlewares/auth.middleware.ts';
+import { requirePermission } from '../middlewares/rbac.middleware.ts';
 import { validateBody } from '../middlewares/validate.middleware.ts';
 import { consultarViabilidadeSchema } from '../validators/viabilidade.validator.ts';
 
@@ -24,7 +25,20 @@ const handler = async (req: Request, res: Response, next: any) => {
   }
 };
 
-router.post('/', authMiddleware, validateBody(consultarViabilidadeSchema), handler);
-router.post('/consultar', authMiddleware, validateBody(consultarViabilidadeSchema), handler);
+router.post(
+  '/',
+  authMiddleware,
+  requirePermission('viabilidade:consultar'),
+  validateBody(consultarViabilidadeSchema),
+  handler
+);
+
+router.post(
+  '/consultar',
+  authMiddleware,
+  requirePermission('viabilidade:consultar'),
+  validateBody(consultarViabilidadeSchema),
+  handler
+);
 
 export const viabilidadeRoutes = router;

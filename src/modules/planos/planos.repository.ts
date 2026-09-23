@@ -1,38 +1,76 @@
 import { db, isDbConnected } from '../../db/client.ts';
 import { planosTable, PlanoDb } from '../../db/schema/planos.ts';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { INITIAL_PLANOS } from '../../data/mockData.ts';
 import { Plano } from '../../types/index.ts';
+import { env } from '../../config/env.ts';
 
 class PlanosRepository {
-  private fallbackPlanos: Plano[] = [...INITIAL_PLANOS];
+  private fallbackPlanos: (Plano & { instanceId?: string })[] = INITIAL_PLANOS.map(p => ({
+    ...p,
+    instanceId: 'inst-enlace-fibra-001'
+  }));
 
-  async getAll(): Promise<Plano[]> {
+  async getAll(instanceId?: string): Promise<Plano[]> {
     if (isDbConnected()) {
       try {
-        const rows = await db.select().from(planosTable).where(eq(planosTable.ativo, true));
-        if (rows.length > 0) {
-          return rows.map(r => this.mapToDomain(r));
+        const conditions = [eq(planosTable.ativo, true)];
+        if (instanceId) {
+          conditions.push(eq(planosTable.instanceId, instanceId));
         }
+
+        const rows = await db
+          .select()
+          .from(planosTable)
+          .where(and(...conditions));
+
+        return rows.map(r => this.mapToDomain(r));
       } catch (err: any) {
+        if (env.NODE_ENV === 'production') {
+          throw new Error(`Falha no banco de dados ao consultar planos em produção: ${err.message}`);
+        }
         console.warn('[PlanosRepository] Falha ao consultar planos no Postgres:', err.message);
       }
     }
-    return [...this.fallbackPlanos];
+
+    if (env.NODE_ENV === 'production') {
+      throw new Error('Banco de dados PostgreSQL indisponível. Operação interrompida em produção.');
+    }
+
+    return this.fallbackPlanos.filter(p => !instanceId || p.instanceId === instanceId);
   }
 
-  async getById(id: string): Promise<Plano | null> {
+  async getById(id: string, instanceId?: string): Promise<Plano | null> {
     if (isDbConnected()) {
       try {
-        const rows = await db.select().from(planosTable).where(eq(planosTable.id, id)).limit(1);
+        const conditions = [eq(planosTable.id, id)];
+        if (instanceId) {
+          conditions.push(eq(planosTable.instanceId, instanceId));
+        }
+
+        const rows = await db
+          .select()
+          .from(planosTable)
+          .where(and(...conditions))
+          .limit(1);
+
         if (rows.length > 0) {
           return this.mapToDomain(rows[0]);
         }
+        return null;
       } catch (err: any) {
+        if (env.NODE_ENV === 'production') {
+          throw new Error(`Falha no banco de dados ao buscar plano por id em produção: ${err.message}`);
+        }
         console.warn('[PlanosRepository] Falha ao buscar plano por id no Postgres:', err.message);
       }
     }
-    return this.fallbackPlanos.find(p => p.id === id) || null;
+
+    if (env.NODE_ENV === 'production') {
+      throw new Error('Banco de dados PostgreSQL indisponível. Operação interrompida em produção.');
+    }
+
+    return this.fallbackPlanos.find(p => p.id === id && (!instanceId || p.instanceId === instanceId)) || null;
   }
 
   private mapToDomain(row: PlanoDb): Plano {

@@ -27,17 +27,17 @@ const STAGE_PROBABILITIES: Record<DealEtapa, number> = {
 };
 
 class DealsService {
-  async listDeals(): Promise<Deal[]> {
-    return dealsRepository.getAll();
+  async listDeals(instanceId?: string): Promise<Deal[]> {
+    return dealsRepository.getAll(instanceId);
   }
 
-  async getDealById(id: string): Promise<Deal | null> {
-    return dealsRepository.getById(id);
+  async getDealById(id: string, instanceId?: string): Promise<Deal | null> {
+    return dealsRepository.getById(id, instanceId);
   }
 
   async createDeal(
     input: CreateDealInput,
-    actor: { id: string; name: string; role: any }
+    actor: { id: string; name: string; role: any; instanceId?: string }
   ): Promise<Deal> {
     const newId = `dl_${Date.now().toString().slice(-6)}`;
     const etapa = input.etapa || 'NOVO_LEAD';
@@ -62,9 +62,10 @@ class DealsService {
       updatedAt: new Date().toISOString()
     };
 
-    const saved = await dealsRepository.create(novoDeal);
+    const saved = await dealsRepository.create(novoDeal, actor.instanceId);
 
     await auditoriaService.logEvent({
+      instanceId: actor.instanceId,
       actorId: actor.id,
       actorName: actor.name,
       actorRole: actor.role,
@@ -81,10 +82,10 @@ class DealsService {
   async moveStage(
     id: string,
     targetStage: DealEtapa,
-    actor: { id: string; name: string; role: any },
+    actor: { id: string; name: string; role: any; instanceId?: string },
     motivo?: string
   ): Promise<Deal> {
-    const existing = await dealsRepository.getById(id);
+    const existing = await dealsRepository.getById(id, actor.instanceId);
     if (!existing) {
       throw new Error('Negócio não encontrado');
     }
@@ -97,6 +98,7 @@ class DealsService {
       targetStage,
       probabilidade,
       actor.id,
+      actor.instanceId,
       motivo
     );
 
@@ -105,6 +107,7 @@ class DealsService {
     }
 
     await auditoriaService.logEvent({
+      instanceId: actor.instanceId,
       actorId: actor.id,
       actorName: actor.name,
       actorRole: actor.role,

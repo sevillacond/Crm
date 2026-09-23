@@ -2,6 +2,7 @@ export type Role = 'ADMIN' | 'SUPERVISOR' | 'ATENDENTE' | 'TECNICO' | 'MAIA_AGEN
 
 export interface User {
   id: string;
+  instanceId?: string;
   name: string;
   email: string;
   role: Role;

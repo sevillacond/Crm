@@ -3,22 +3,23 @@ import { OrdemServico, OSStatus } from '../../types/index.ts';
 import { auditoriaService } from '../auditoria/auditoria.service.ts';
 
 class OrdensService {
-  async listAll(): Promise<OrdemServico[]> {
-    return ordensRepository.getAll();
+  async listAll(instanceId?: string): Promise<OrdemServico[]> {
+    return ordensRepository.getAll(instanceId);
   }
 
-  async getById(id: string): Promise<OrdemServico | null> {
-    return ordensRepository.getById(id);
+  async getById(id: string, instanceId?: string): Promise<OrdemServico | null> {
+    return ordensRepository.getById(id, instanceId);
   }
 
   async updateStatus(
     id: string,
     status: OSStatus,
-    actor: { id: string; name: string; role: any }
+    actor: { id: string; name: string; role: any; instanceId?: string }
   ): Promise<OrdemServico | null> {
-    const updated = await ordensRepository.updateStatus(id, status);
+    const updated = await ordensRepository.updateStatus(id, status, actor.instanceId);
     if (updated) {
       await auditoriaService.logEvent({
+        instanceId: actor.instanceId,
         actorId: actor.id,
         actorName: actor.name,
         actorRole: actor.role,

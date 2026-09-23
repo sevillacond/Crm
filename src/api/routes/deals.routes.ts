@@ -1,51 +1,66 @@
 import { Router, Request, Response } from 'express';
 import { dealsService } from '../../modules/deals/deals.service.ts';
 import { authMiddleware } from '../middlewares/auth.middleware.ts';
-import { requireRole } from '../middlewares/rbac.middleware.ts';
+import { requirePermission } from '../middlewares/rbac.middleware.ts';
 import { validateBody } from '../middlewares/validate.middleware.ts';
 import { createDealSchema, updateDealStageSchema } from '../validators/deals.validator.ts';
 
 const router = Router();
 
 // GET /api/deals
-router.get('/', authMiddleware, async (_req: Request, res: Response, next) => {
-  try {
-    const deals = await dealsService.listDeals();
-    res.json(deals);
-  } catch (err) {
-    next(err);
+router.get(
+  '/',
+  authMiddleware,
+  requirePermission('deals:read'),
+  async (req: Request, res: Response, next) => {
+    try {
+      const deals = await dealsService.listDeals(req.instanceId);
+      res.json(deals);
+    } catch (err) {
+      next(err);
+    }
   }
-});
+);
 
 // GET /api/deals/:id
-router.get('/:id', authMiddleware, async (req: Request, res: Response, next) => {
-  try {
-    const deal = await dealsService.getDealById(req.params.id);
-    if (!deal) {
-      res.status(404).json({ error: { code: 'DEAL_NOT_FOUND', message: 'Negócio não encontrado' } });
-      return;
+router.get(
+  '/:id',
+  authMiddleware,
+  requirePermission('deals:read'),
+  async (req: Request, res: Response, next) => {
+    try {
+      const deal = await dealsService.getDealById(req.params.id, req.instanceId);
+      if (!deal) {
+        res.status(404).json({ error: { code: 'DEAL_NOT_FOUND', message: 'Negócio não encontrado' } });
+        return;
+      }
+      res.json(deal);
+    } catch (err) {
+      next(err);
     }
-    res.json(deal);
-  } catch (err) {
-    next(err);
   }
-});
+);
 
 // GET /api/deals/:id/history
-router.get('/:id/history', authMiddleware, async (req: Request, res: Response, next) => {
-  try {
-    const history = await dealsService.getDealHistory(req.params.id);
-    res.json(history);
-  } catch (err) {
-    next(err);
+router.get(
+  '/:id/history',
+  authMiddleware,
+  requirePermission('deals:read'),
+  async (req: Request, res: Response, next) => {
+    try {
+      const history = await dealsService.getDealHistory(req.params.id);
+      res.json(history);
+    } catch (err) {
+      next(err);
+    }
   }
-});
+);
 
 // POST /api/deals
 router.post(
   '/',
   authMiddleware,
-  requireRole(['ADMIN', 'SUPERVISOR', 'ATENDENTE']),
+  requirePermission('deals:create'),
   validateBody(createDealSchema),
   async (req: Request, res: Response, next) => {
     try {
@@ -62,7 +77,7 @@ router.post(
 router.patch(
   '/:id/stage',
   authMiddleware,
-  requireRole(['ADMIN', 'SUPERVISOR', 'ATENDENTE']),
+  requirePermission('deals:stage_move'),
   validateBody(updateDealStageSchema),
   async (req: Request, res: Response, next) => {
     try {

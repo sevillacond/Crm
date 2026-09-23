@@ -23,6 +23,7 @@ export const auditEventsTable = pgTable(
     origem: varchar('origem', { length: 64 }).notNull().default('WEB_CRM'),
     resultado: varchar('resultado', { length: 32 }).notNull().default('SUCESSO'),
     isMaiaAction: boolean('is_maia_action').notNull().default(false),
+    previousHash: varchar('previous_hash', { length: 128 }),
     hashIntegridade: varchar('hash_integridade', { length: 128 })
   },
   (table) => ({

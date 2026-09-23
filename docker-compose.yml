@@ -2,7 +2,8 @@ version: '3.8'
 
 # ==============================================================================
 # ENLACE TELECOM CRM — DOCKER COMPOSE DE IMPLANTAÇÃO
-# Instância Isolada (Single-Tenant) por Provedor
+# Instância Isolada (Single-Tenant) por Provedor / CNPJ
+# P0 Hardening & PostgreSQL 16 Dedicado
 # ==============================================================================
 
 services:
@@ -18,11 +19,14 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - VITE_INSTANCE_ID=${VITE_INSTANCE_ID:-inst-enlace-fibra-001}
+      - INSTANCE_ID=${INSTANCE_ID:-inst-enlace-fibra-001}
       - JWT_SECRET=${JWT_SECRET}
       - DATABASE_URL=postgresql://${POSTGRES_USER:-enlace_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-enlace_crm_db}?sslmode=disable
       - REDIS_URL=redis://redis:6379
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+      - ADMIN_INITIAL_EMAIL=${ADMIN_INITIAL_EMAIL:-admin@enlace.net.br}
+      - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
       - WHATSAPP_API_TOKEN=${WHATSAPP_API_TOKEN}
       - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID}
       - SGP_INTEGRACAO=${SGP_INTEGRACAO:-IXC_SOFT}
@@ -32,6 +36,14 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - enlace-network
 
@@ -46,7 +58,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-enlace_crm_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    # Portas 5432 NÃO expostas para o host externo por segurança (rede interna apenas)
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-enlace_user} -d ${POSTGRES_DB:-enlace_crm_db}"]
       interval: 10s
@@ -55,7 +66,7 @@ services:
     networks:
       - enlace-network
 
-  # Cache de Sessão & Filas em Tempo Real (Redis) - Rede Interna Isolada
+  # Cache de Sessão & Rate Limiting Distribuído (Redis) - Rede Interna Isolada
   redis:
     image: redis:7-alpine
     container_name: enlace-redis-cache
@@ -63,7 +74,6 @@ services:
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
-    # Portas 6379 NÃO expostas para o host externo por segurança (rede interna apenas)
     networks:
       - enlace-network
 

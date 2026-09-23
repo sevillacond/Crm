@@ -1,8 +1,9 @@
 import { db, isDbConnected } from '../../db/client.ts';
 import { usersTable, UserDb } from '../../db/schema/users.ts';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { INITIAL_USERS } from '../../data/mockData.ts';
 import { User, Role } from '../../types/index.ts';
+import { env } from '../../config/env.ts';
 import bcrypt from 'bcryptjs';
 
 export interface UserWithAuth extends User {
@@ -10,51 +11,97 @@ export interface UserWithAuth extends User {
 }
 
 class UsersRepository {
-  private fallbackUsers: UserWithAuth[] = INITIAL_USERS.map(u => ({
+  private fallbackUsers: (UserWithAuth & { instanceId?: string })[] = INITIAL_USERS.map(u => ({
     ...u,
-    // Pre-calculated bcrypt hash of 'Enlace@2026!'
-    passwordHash: '$2a$10$wO8o3g1B8NkWf8EreQjB7OzYw4J5RjP.4e8H7J8Cq9B0a1b2c3d4e'
+    instanceId: 'inst-enlace-fibra-001',
+    passwordHash: '$2a$10$iMh.OQf9n1q4T7E14y17c.yJb6R6yJ7G8n9k.Wz1e9c2b3d4e5f6g'
   }));
 
-  async getAll(): Promise<User[]> {
+  async getAll(instanceId?: string): Promise<User[]> {
     if (isDbConnected()) {
       try {
-        const rows = await db.select().from(usersTable);
-        if (rows.length > 0) {
-          return rows.map(r => this.mapToDomain(r));
-        }
+        const query = db.select().from(usersTable);
+        const rows = instanceId
+          ? await query.where(eq(usersTable.instanceId, instanceId))
+          : await query;
+
+        return rows.map(r => this.mapToDomain(r));
       } catch (err: any) {
+        if (env.NODE_ENV === 'production') {
+          throw new Error(`Falha no banco de dados ao buscar usuários em produção: ${err.message}`);
+        }
         console.warn('[UsersRepository] Falha ao consultar users no Postgres:', err.message);
       }
     }
-    return this.fallbackUsers.map(({ passwordHash, ...u }) => u);
+
+    if (env.NODE_ENV === 'production') {
+      throw new Error('Banco de dados PostgreSQL indisponível. Operação interrompida em produção.');
+    }
+
+    return this.fallbackUsers
+      .filter(u => !instanceId || u.instanceId === instanceId)
+      .map(({ passwordHash, ...u }) => u);
   }
 
-  async getById(id: string): Promise<User | null> {
+  async getById(id: string, instanceId?: string): Promise<User | null> {
     if (isDbConnected()) {
       try {
-        const rows = await db.select().from(usersTable).where(eq(usersTable.id, id)).limit(1);
+        const conditions = [eq(usersTable.id, id)];
+        if (instanceId) {
+          conditions.push(eq(usersTable.instanceId, instanceId));
+        }
+
+        const rows = await db
+          .select()
+          .from(usersTable)
+          .where(and(...conditions))
+          .limit(1);
+
         if (rows.length > 0) {
           return this.mapToDomain(rows[0]);
         }
+        return null;
       } catch (err: any) {
+        if (env.NODE_ENV === 'production') {
+          throw new Error(`Falha no banco de dados ao buscar usuário por ID em produção: ${err.message}`);
+        }
         console.warn('[UsersRepository] Falha ao buscar user por ID no Postgres:', err.message);
       }
     }
-    const found = this.fallbackUsers.find(u => u.id === id);
+
+    if (env.NODE_ENV === 'production') {
+      throw new Error('Banco de dados PostgreSQL indisponível. Operação interrompida em produção.');
+    }
+
+    const found = this.fallbackUsers.find(
+      u => u.id === id && (!instanceId || u.instanceId === instanceId)
+    );
     if (!found) return null;
     const { passwordHash, ...rest } = found;
     return rest;
   }
 
-  async getByEmailWithAuth(email: string): Promise<UserWithAuth | null> {
+  async getByEmailWithAuth(email: string, instanceId?: string): Promise<UserWithAuth | null> {
+    const normalized = email.toLowerCase().trim();
+
     if (isDbConnected()) {
       try {
-        const rows = await db.select().from(usersTable).where(eq(usersTable.email, email.toLowerCase().trim())).limit(1);
+        const conditions = [eq(usersTable.email, normalized)];
+        if (instanceId) {
+          conditions.push(eq(usersTable.instanceId, instanceId));
+        }
+
+        const rows = await db
+          .select()
+          .from(usersTable)
+          .where(and(...conditions))
+          .limit(1);
+
         if (rows.length > 0) {
           const r = rows[0];
           return {
             id: r.id,
+            instanceId: r.instanceId,
             name: r.name,
             email: r.email,
             role: r.role as Role,
@@ -64,27 +111,43 @@ class UsersRepository {
             passwordHash: r.passwordHash
           };
         }
+        return null;
       } catch (err: any) {
+        if (env.NODE_ENV === 'production') {
+          throw new Error(`Falha no banco de dados ao buscar usuário por e-mail em produção: ${err.message}`);
+        }
         console.warn('[UsersRepository] Falha ao buscar user por email no Postgres:', err.message);
       }
     }
-    const found = this.fallbackUsers.find(u => u.email.toLowerCase() === email.toLowerCase().trim());
+
+    if (env.NODE_ENV === 'production') {
+      throw new Error('Banco de dados PostgreSQL indisponível. Operação interrompida em produção.');
+    }
+
+    const found = this.fallbackUsers.find(
+      u => u.email.toLowerCase() === normalized && (!instanceId || u.instanceId === instanceId)
+    );
     return found || null;
   }
 
-  async create(user: User, rawPassword?: string): Promise<User> {
+  async create(user: User, rawPassword?: string, instanceId?: string): Promise<User> {
+    const finalInstanceId = instanceId || user.instanceId || env.INSTANCE_ID || 'inst-enlace-fibra-001';
+
+    if (!rawPassword && env.NODE_ENV === 'production') {
+      throw new Error('A senha de usuário é obrigatória para cadastro em produção.');
+    }
+
     const passwordHash = rawPassword
-      ? await bcrypt.hash(rawPassword, 10)
+      ? await bcrypt.hash(rawPassword, 12)
       : await bcrypt.hash('Enlace@2026!', 10);
 
-    const fullUser: UserWithAuth = { ...user, passwordHash };
-    this.fallbackUsers.push(fullUser);
+    const fullUser: UserWithAuth = { ...user, instanceId: finalInstanceId, passwordHash };
 
     if (isDbConnected()) {
       try {
         await db.insert(usersTable).values({
           id: user.id,
-          instanceId: 'inst_enlace_sp_001',
+          instanceId: finalInstanceId,
           name: user.name,
           email: user.email.toLowerCase().trim(),
           passwordHash,
@@ -93,11 +156,21 @@ class UsersRepository {
           department: user.department,
           status: user.status
         });
+        const { passwordHash: _, ...rest } = fullUser;
+        return rest;
       } catch (err: any) {
+        if (env.NODE_ENV === 'production') {
+          throw new Error(`Falha no banco de dados ao criar usuário no Postgres em produção: ${err.message}`);
+        }
         console.warn('[UsersRepository] Falha ao inserir user no Postgres:', err.message);
       }
     }
 
+    if (env.NODE_ENV === 'production') {
+      throw new Error('Banco de dados PostgreSQL indisponível. Impossível criar usuário em produção.');
+    }
+
+    this.fallbackUsers.push(fullUser);
     const { passwordHash: _, ...rest } = fullUser;
     return rest;
   }
@@ -105,6 +178,7 @@ class UsersRepository {
   private mapToDomain(row: UserDb): User {
     return {
       id: row.id,
+      instanceId: row.instanceId,
       name: row.name,
       email: row.email,
       role: row.role as Role,

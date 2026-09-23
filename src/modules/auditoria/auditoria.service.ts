@@ -2,8 +2,8 @@ import { auditoriaRepository, AuditEventInput } from './auditoria.repository.ts'
 import { AuditLog } from '../../types/index.ts';
 
 class AuditoriaService {
-  async listLogs(limit?: number): Promise<AuditLog[]> {
-    return auditoriaRepository.list(limit);
+  async listLogs(instanceId?: string, limit?: number): Promise<AuditLog[]> {
+    return auditoriaRepository.list(instanceId, limit);
   }
 
   async logEvent(input: AuditEventInput): Promise<AuditLog> {

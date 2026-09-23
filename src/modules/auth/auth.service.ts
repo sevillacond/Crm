@@ -1,11 +1,13 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { usersRepository } from '../users/users.repository.ts';
 import { auditoriaService } from '../auditoria/auditoria.service.ts';
+import { sessionsRepository } from './sessions.repository.ts';
 import { User, Role } from '../../types/index.ts';
+import { env } from '../../config/env.ts';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'enlace_crm_secure_jwt_secret_dev_key_2026';
-const TOKEN_EXPIRY = '8h';
+const TOKEN_EXPIRY_SECONDS = 8 * 60 * 60; // 8 hours
 
 // In-memory failed attempts tracker for brute force mitigation
 const failedAttempts = new Map<string, { count: number; lockedUntil: number }>();
@@ -14,6 +16,15 @@ export interface AuthSession {
   token: string;
   user: User;
   expiresIn: string;
+}
+
+export interface JwtTokenPayload {
+  sub: string;
+  instanceId?: string;
+  name: string;
+  email: string;
+  role: Role;
+  sessionId: string;
 }
 
 class AuthService {
@@ -40,7 +51,7 @@ class AuthService {
       throw new Error('Credenciais inválidas.');
     }
 
-    // 3. Verify password hash
+    // 3. Verify password hash using strict bcrypt
     let passwordMatches = false;
     try {
       passwordMatches = await bcrypt.compare(rawPassword, userWithAuth.passwordHash);
@@ -48,11 +59,7 @@ class AuthService {
       passwordMatches = false;
     }
 
-    // Fallback for default seed login in demo mode
-    if (!passwordMatches && rawPassword === 'Enlace@2026!') {
-      passwordMatches = true;
-    }
-
+    // Proibição estrita: NUNCA usar senhas master ou universais
     if (!passwordMatches) {
       this.recordFailedAttempt(rateKey);
       throw new Error('Credenciais inválidas.');
@@ -63,6 +70,7 @@ class AuthService {
 
     const user: User = {
       id: userWithAuth.id,
+      instanceId: userWithAuth.instanceId,
       name: userWithAuth.name,
       email: userWithAuth.email,
       role: userWithAuth.role,
@@ -71,27 +79,45 @@ class AuthService {
       status: userWithAuth.status
     };
 
-    // 4. Generate signed JWT token
-    const token = jwt.sign(
-      {
-        sub: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role
-      },
-      JWT_SECRET,
-      { expiresIn: TOKEN_EXPIRY }
-    );
+    // 4. Generate unique session ID & token
+    const sessionId = `ses_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
+    const expiresAt = new Date(Date.now() + TOKEN_EXPIRY_SECONDS * 1000);
 
-    // 5. Audit login event
+    const tokenPayload: JwtTokenPayload = {
+      sub: user.id,
+      instanceId: user.instanceId,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      sessionId
+    };
+
+    const token = jwt.sign(tokenPayload, env.JWT_SECRET, {
+      expiresIn: TOKEN_EXPIRY_SECONDS
+    });
+
+    // 5. Persist session in sessions repository
+    await sessionsRepository.createSession({
+      id: sessionId,
+      userId: user.id,
+      instanceId: user.instanceId,
+      token,
+      ipAddress,
+      userAgent,
+      expiresAt,
+      createdAt: new Date()
+    });
+
+    // 6. Audit login event
     await auditoriaService.logEvent({
+      instanceId: user.instanceId,
       actorId: user.id,
       actorName: user.name,
       actorRole: user.role,
       action: 'AUTH_LOGIN_SUCCESS',
       entityType: 'AUTH',
       entityId: user.id,
-      details: `Login efetuado com sucesso via Web CRM (${user.email})`,
+      details: `Login efetuado com sucesso via Web CRM (${user.email}). Sessão: ${sessionId}`,
       ipAddress,
       userAgent
     });
@@ -99,15 +125,42 @@ class AuthService {
     return {
       token,
       user,
-      expiresIn: TOKEN_EXPIRY
+      expiresIn: '8h'
     };
   }
 
-  verifyToken(token: string): { sub: string; name: string; email: string; role: Role } {
+  async verifyToken(token: string): Promise<JwtTokenPayload> {
     try {
-      return jwt.verify(token, JWT_SECRET) as any;
+      const decoded = jwt.verify(token, env.JWT_SECRET) as JwtTokenPayload;
+
+      // Validate session persistence & revocation
+      const session = await sessionsRepository.findValidSession(token);
+      if (!session) {
+        throw new Error('Sessão expirada ou revogada pelo servidor.');
+      }
+
+      return decoded;
     } catch (err: any) {
-      throw new Error('Token de autenticação inválido ou expirado.');
+      throw new Error(err.message || 'Token de autenticação inválido ou expirado.');
+    }
+  }
+
+  async logout(token: string, user?: User, ipAddress?: string, userAgent?: string): Promise<void> {
+    await sessionsRepository.revokeSession(token);
+
+    if (user) {
+      await auditoriaService.logEvent({
+        instanceId: user.instanceId,
+        actorId: user.id,
+        actorName: user.name,
+        actorRole: user.role,
+        action: 'AUTH_LOGOUT',
+        entityType: 'AUTH',
+        entityId: user.id,
+        details: `Sessão encerrada com sucesso e token revogado (${user.email})`,
+        ipAddress,
+        userAgent
+      });
     }
   }
 

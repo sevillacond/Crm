@@ -31,8 +31,17 @@ router.get('/me', authMiddleware, (req: Request, res: Response) => {
 });
 
 // POST /api/auth/logout
-router.post('/logout', authMiddleware, (_req: Request, res: Response) => {
-  res.json({ status: 'ok', message: 'Sessão encerrada com sucesso.' });
+router.post('/logout', authMiddleware, async (req: Request, res: Response, next) => {
+  try {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    if (req.token) {
+      await authService.logout(req.token, req.user, ip, userAgent);
+    }
+    res.json({ status: 'ok', message: 'Sessão encerrada e token revogado com sucesso.' });
+  } catch (err) {
+    next(err);
+  }
 });
 
 export const authRoutes = router;
