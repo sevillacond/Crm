@@ -1,0 +1,62 @@
+# ==============================================================================
+# ENLACE TELECOM CRM — DOCKERFILE MULTI-STAGE DE PRODUÇÃO
+# Single-Tenant Dedicated ISP Instance
+# ==============================================================================
+
+# Estágio 1: Build da Aplicação (Frontend Vite + Server TypeScript)
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Instalar ferramentas de compilação essenciais
+RUN apk add --no-cache libc6-compat
+
+# Copiar manifestos de dependência
+COPY package.json package-lock.json* bun.lock* ./
+
+# Instalar dependências completas para compilação
+RUN npm install --frozen-lockfile || npm install
+
+# Copiar todo o código-fonte da aplicação
+COPY . .
+
+# Compilar o frontend estático React (Vite SPA -> /app/dist)
+RUN npm run build
+
+# ==============================================================================
+# Estágio 2: Imagem Final de Execução (Minimalista & Segura)
+# ==============================================================================
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+# Definir ambiente como produção
+ENV NODE_ENV=production
+ENV PORT=3000
+
+# Criar usuário não-root por segurança (Conformidade CIS Docker Benchmark)
+RUN addgroup --system --gid 1001 enlace && \
+    adduser --system --uid 1001 enlace
+
+# Copiar arquivos de configuração e dependências necessárias
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/server.ts ./server.ts
+COPY --from=builder /app/src ./src
+COPY --from=builder /app/tsconfig.json ./tsconfig.json
+
+# Ajustar propriedade dos arquivos para o usuário não-root
+RUN chown -R enlace:enlace /app
+
+USER enlace
+
+# Expor porta padrão de execução
+EXPOSE 3000
+
+# Health check para orquestradores (Kubernetes, AWS ECS, Google Cloud Run)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/health || exit 1
+
+# Comando de inicialização via tsx com Express
+CMD ["npm", "start"]

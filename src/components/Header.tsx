@@ -20,6 +20,7 @@ interface HeaderProps {
   onSelectUser: (user: User) => void;
   activeTab: string;
   onOpenMaia: () => void;
+  onNavigateTab?: (tab: string) => void;
   searchQuery: string;
   setSearchQuery: (q: string) => void;
   onToggleMobileSidebar: () => void;
@@ -32,6 +33,7 @@ export const Header: React.FC<HeaderProps> = ({
   onSelectUser,
   activeTab,
   onOpenMaia,
+  onNavigateTab,
   searchQuery,
   setSearchQuery,
   onToggleMobileSidebar
@@ -44,6 +46,8 @@ export const Header: React.FC<HeaderProps> = ({
         return { category: 'Business Intelligence', title: 'Relatórios Analíticos & Performance Operacional' };
       case 'kanban':
         return { category: 'CRM Comercial', title: 'Funil de Vendas Kanban' };
+      case 'ordens':
+        return { category: 'Operações de Campo', title: 'Ordens de Serviço (O.S.) & Ativações FTTH' };
       case 'contatos':
         return { category: 'CRM Comercial', title: 'Clientes & Contatos (PF/PJ)' };
       case 'planos':
@@ -74,6 +78,8 @@ export const Header: React.FC<HeaderProps> = ({
         return { category: 'Arquitetura & PRD 1.0', title: 'Instância Isolada & Matriz de Requisitos' };
       case 'configuracoes':
         return { category: 'Administração & Parâmetros', title: 'Configurações da Instância, Horários & SLA' };
+      case 'ajuda':
+        return { category: 'Ajuda & Operações', title: 'Central de Ajuda, Guias & Glossário ISP' };
       default:
         return { category: 'Enlace CRM', title: 'Painel Geral' };
     }
@@ -163,6 +169,22 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Right Tools & RBAC Switcher */}
         <div className="flex items-center gap-2.5">
+          {/* Ajuda & Guias Quick Trigger */}
+          {onNavigateTab && (
+            <button
+              onClick={() => onNavigateTab('ajuda')}
+              className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-xl border transition-all cursor-pointer ${
+                activeTab === 'ajuda'
+                  ? 'bg-emerald-950 text-emerald-300 border-emerald-800 font-bold shadow-md'
+                  : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800 hover:text-white'
+              }`}
+              title="Central de Ajuda, Guias & Glossário"
+            >
+              <HelpCircle className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden sm:inline">Ajuda</span>
+            </button>
+          )}
+
           {/* MaIA Quick Trigger */}
           <button
             onClick={onOpenMaia}

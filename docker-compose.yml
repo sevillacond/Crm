@@ -1,0 +1,79 @@
+version: '3.8'
+
+# ==============================================================================
+# ENLACE TELECOM CRM — DOCKER COMPOSE DE IMPLANTAÇÃO
+# Instância Isolada (Single-Tenant) por Provedor
+# ==============================================================================
+
+services:
+  # Aplicação Core (Frontend SPA + Backend Express + Motor MaIA)
+  enlace-crm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: enlace-telecom-crm
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - VITE_INSTANCE_ID=${VITE_INSTANCE_ID:-inst-enlace-fibra-001}
+      - DATABASE_URL=postgresql://enlace_user:${POSTGRES_PASSWORD:-enlace_secret_2026}@postgres:5432/enlace_crm_db?sslmode=disable
+      - REDIS_URL=redis://redis:6379
+      - WHATSAPP_API_TOKEN=${WHATSAPP_API_TOKEN}
+      - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID}
+      - SGP_INTEGRACAO=${SGP_INTEGRACAO:-IXC_SOFT}
+      - SGP_API_ENDPOINT=${SGP_API_ENDPOINT}
+      - SGP_API_TOKEN=${SGP_API_TOKEN}
+      - ASTERISK_WEBRTC_WSS=${ASTERISK_WEBRTC_WSS:-wss://pbx.enlace.com.br:8089/ws}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - enlace-network
+
+  # Banco de Dados Relacional Dedicado (PostgreSQL 16)
+  postgres:
+    image: postgres:16-alpine
+    container_name: enlace-postgres-dedicated
+    restart: always
+    environment:
+      POSTGRES_USER: enlace_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-enlace_secret_2026}
+      POSTGRES_DB: enlace_crm_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U enlace_user -d enlace_crm_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - enlace-network
+
+  # Cache de Sessão & Filas em Tempo Real (Redis)
+  redis:
+    image: redis:7-alpine
+    container_name: enlace-redis-cache
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - enlace-network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  enlace-network:
+    driver: bridge

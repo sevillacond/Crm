@@ -49,8 +49,14 @@ docs/prd/
 ├── 21-OBSERVABILIDADE-BACKUP.md
 ├── 22-TESTES-HOMOLOGACAO.md
 ├── 23-DEPLOY-OPERACAO.md
-└── 24-LIMITES-DO-PRODUTO.md
+├── 24-LIMITES-DO-PRODUTO.md
+└── 25-AJUDA-SOP-OPERACIONAL.md
 ```
+
+### Documentações Complementares
+- **Manual do Agente MaIA**: `AGENTE.md` (e `docs/AGENTE.md`)
+- **Guia de Deploy em Produção**: `docs/DEPLOY.md`
+- **Módulo de Ajuda & Glossário no CRM**: `src/components/AjudaView.tsx`
 
 ---
 

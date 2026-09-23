@@ -223,6 +223,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
           subLabel: 'Parâmetros, Horários & SLA',
           icon: Settings,
           badge: null
+        },
+        {
+          id: 'ajuda',
+          label: 'Ajuda & Operações',
+          subLabel: 'Guias, FAQ & Glossário ISP',
+          icon: HelpCircle,
+          badge: 'SOP',
+          badgeColor: 'bg-emerald-950 text-emerald-300 border-emerald-800'
         }
       ]
     }

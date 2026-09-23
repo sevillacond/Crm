@@ -62,7 +62,7 @@ function addAuditLog(
 // -------------------------------------------------------------
 
 // Health & Architecture check
-app.get('/api/health', (_req: Request, res: Response) => {
+const handleHealthCheck = (_req: Request, res: Response) => {
   res.json({
     status: 'ok',
     instanceId: instanceConfig.instanceId,
@@ -73,7 +73,10 @@ app.get('/api/health', (_req: Request, res: Response) => {
     versaoMaia: instanceConfig.versaoMaia,
     timestamp: new Date().toISOString()
   });
-});
+};
+
+app.get('/health', handleHealthCheck);
+app.get('/api/health', handleHealthCheck);
 
 // Instance configuration
 app.get('/api/instance', (_req: Request, res: Response) => {

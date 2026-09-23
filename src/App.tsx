@@ -22,6 +22,7 @@ import { InstanceView } from './components/InstanceView';
 import { PlanosCatalog } from './components/PlanosCatalog';
 import { OrdensServicoView } from './components/OrdensServicoView';
 import { ViabilidadeView } from './components/ViabilidadeView';
+import { AjudaView } from './components/AjudaView';
 import { 
   INITIAL_INSTANCE, 
   INITIAL_USERS, 
@@ -275,6 +276,7 @@ export default function App() {
             setMaiaTargetContato(null);
             setIsMaiaOpen(true);
           }}
+          onNavigateTab={setActiveTab}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
           onToggleMobileSidebar={() => setMobileSidebarOpen(prev => !prev)}
@@ -554,6 +556,10 @@ export default function App() {
 
         {activeTab === 'configuracoes' && (
           <ConfiguracoesView instance={instance} />
+        )}
+
+        {activeTab === 'ajuda' && (
+          <AjudaView />
         )}
       </main>
       </div>
