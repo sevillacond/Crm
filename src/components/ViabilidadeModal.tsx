@@ -39,15 +39,16 @@ export const ViabilidadeModal: React.FC<ViabilidadeModalProps> = ({
     try {
       const response = await fetch('/api/viabilidade/consultar', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': currentUser.id
+        },
         body: JSON.stringify({
           cep,
           numero,
           bairro,
-          contatoId: contato?.id,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          actorRole: currentUser.role
+          cidade,
+          contatoId: contato?.id
         })
       });
 

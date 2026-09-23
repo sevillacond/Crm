@@ -94,11 +94,12 @@ export default function App() {
   // Fetch initial data from server API
   const refreshData = async () => {
     try {
+      const headers = { 'x-user-id': currentUser.id };
       const [resInst, resDeals, resContatos, resAudit] = await Promise.all([
-        fetch('/api/instance').then(r => r.ok ? r.json() : null),
-        fetch('/api/deals').then(r => r.ok ? r.json() : null),
-        fetch('/api/contatos').then(r => r.ok ? r.json() : null),
-        fetch('/api/audit').then(r => r.ok ? r.json() : null)
+        fetch('/api/instance', { headers }).then(r => r.ok ? r.json() : null),
+        fetch('/api/deals', { headers }).then(r => r.ok ? r.json() : null),
+        fetch('/api/contatos', { headers }).then(r => r.ok ? r.json() : null),
+        fetch('/api/audit', { headers }).then(r => r.ok ? r.json() : null)
       ]);
 
       if (resInst) setInstance(resInst);
@@ -112,19 +113,20 @@ export default function App() {
 
   useEffect(() => {
     refreshData();
-  }, []);
+  }, [currentUser]);
 
   // Handle Stage Movement in Kanban
   const handleMoveDealStage = async (dealId: string, targetStage: DealEtapa) => {
     try {
       const res = await fetch(`/api/deals/${dealId}/stage`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': currentUser.id
+        },
         body: JSON.stringify({
           etapa: targetStage,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          actorRole: currentUser.role
+          motivo: 'Avanço de pipeline pelo operador'
         })
       });
 
@@ -146,14 +148,15 @@ export default function App() {
   // Handle New Lead and Initial Deal Creation
   const handleCreateNewLead = async (formData: any) => {
     try {
+      const headers = {
+        'Content-Type': 'application/json',
+        'x-user-id': currentUser.id
+      };
       const resContato = await fetch('/api/contatos', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
-          ...formData,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          actorRole: currentUser.role
+          ...formData
         })
       });
 
@@ -163,7 +166,7 @@ export default function App() {
       const planoEscolhido = planos.find(p => p.id === formData.planoId) || planos[0];
       const resDeal = await fetch('/api/deals', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           titulo: `${planoEscolhido.nome} - ${newContato.nome}`,
           contatoId: newContato.id,
@@ -171,10 +174,7 @@ export default function App() {
           etapa: 'NOVO_LEAD',
           valorMensal: planoEscolhido.precoMensal,
           taxaAdesao: planoEscolhido.adesao,
-          responsavelId: currentUser.id,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          actorRole: currentUser.role
+          responsavelId: currentUser.id
         })
       });
 

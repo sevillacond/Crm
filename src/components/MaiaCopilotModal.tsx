@@ -76,14 +76,14 @@ export const MaiaCopilotModal: React.FC<MaiaCopilotModalProps> = ({
     try {
       const response = await fetch('/api/maia/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': currentUser.id
+        },
         body: JSON.stringify({
           prompt: text,
           dealId: selectedDeal?.id,
-          contatoId: selectedContato?.id,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          actorRole: currentUser.role
+          contatoId: selectedContato?.id
         })
       });
 

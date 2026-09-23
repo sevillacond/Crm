@@ -1,0 +1,38 @@
+import { Router, Request, Response } from 'express';
+import { authService } from '../../modules/auth/auth.service.ts';
+import { validateBody } from '../middlewares/validate.middleware.ts';
+import { loginSchema } from '../validators/auth.validator.ts';
+import { authMiddleware } from '../middlewares/auth.middleware.ts';
+
+const router = Router();
+
+// POST /api/auth/login
+router.post('/login', validateBody(loginSchema), async (req: Request, res: Response, next) => {
+  try {
+    const { email, password } = req.body;
+    const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+
+    const session = await authService.login(email, password, ip, userAgent);
+    res.json(session);
+  } catch (err: any) {
+    res.status(401).json({
+      error: {
+        code: 'AUTH_FAILED',
+        message: err.message || 'Falha na autenticação'
+      }
+    });
+  }
+});
+
+// GET /api/auth/me
+router.get('/me', authMiddleware, (req: Request, res: Response) => {
+  res.json({ user: req.user });
+});
+
+// POST /api/auth/logout
+router.post('/logout', authMiddleware, (_req: Request, res: Response) => {
+  res.json({ status: 'ok', message: 'Sessão encerrada com sucesso.' });
+});
+
+export const authRoutes = router;
