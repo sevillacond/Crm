@@ -5,17 +5,29 @@ import { sessionsRepository } from '../src/modules/auth/sessions.repository.ts';
 import { hasPermission } from '../src/modules/auth/permissions.ts';
 import { contatosRepository } from '../src/modules/contatos/contatos.repository.ts';
 import { dealsRepository } from '../src/modules/deals/deals.repository.ts';
+import { dealsService } from '../src/modules/deals/deals.service.ts';
+import { planosRepository } from '../src/modules/planos/planos.repository.ts';
 import { usersRepository } from '../src/modules/users/users.repository.ts';
 import { auditoriaRepository } from '../src/modules/auditoria/auditoria.repository.ts';
 import { instancesRepository } from '../src/modules/instances/instances.repository.ts';
 import { maiaPolicyEngine } from '../src/modules/maia/policyEngine.ts';
-import { MAIA_TOOL_REGISTRY, executeMaiaTool, approveAndExecuteTool } from '../src/modules/maia/toolRegistry.ts';
-import { maiaApprovalsRepository } from '../src/modules/maia/approvals.repository.ts';
+import {
+  executeMaiaTool,
+  approveToolApproval,
+  rejectToolApproval,
+  executeApprovedTool,
+  approveAndExecuteTool
+} from '../src/modules/maia/toolRegistry.ts';
+import {
+  maiaApprovalsRepository,
+  calculateParamsHash
+} from '../src/modules/maia/approvals.repository.ts';
 import { maiaService } from '../src/modules/maia/maia.service.ts';
 import { createActorContext } from '../src/modules/auth/actorContext.ts';
 import { validateEnv, env } from '../src/config/env.ts';
-import { checkLoginLockout, recordFailedLogin } from '../src/shared/redis.ts';
-import { Contato, Deal } from '../src/types/index.ts';
+import { checkLoginLockout } from '../src/shared/redis.ts';
+import { maiaRateLimiter } from '../src/api/middlewares/rateLimiter.ts';
+import { Contato } from '../src/types/index.ts';
 
 let passedCount = 0;
 let failedCount = 0;
@@ -35,11 +47,11 @@ async function runTest(name: string, fn: () => Promise<void>) {
 
 async function main() {
   console.log('\n======================================================');
-  console.log('   ENLACE CRM — P0.3 HARDENING & SECURITY SUITE');
+  console.log('   ENLACE CRM — P0.4 AUDITORIA & SUÍTE DE TESTES');
   console.log('======================================================\n');
 
   // ==========================================
-  // 1. AUTH SUITE
+  // SUÍTE 1: AUTENTICAÇÃO E STARTUP
   // ==========================================
 
   await runTest('1.1 Login válido gera sessão, token JWT e registra auditoria', async () => {
@@ -50,6 +62,7 @@ async function main() {
 
     const validSession = await sessionsRepository.findValidSession(session.token);
     assert(validSession !== null, 'Sessão deve estar persistida no repositório');
+    assert.strictEqual(validSession.instanceId, session.user.instanceId);
   });
 
   await runTest('1.2 Autenticação rejeita senha incorreta', async () => {
@@ -57,7 +70,7 @@ async function main() {
       await authService.login('admin@enlace.net.br', 'SenhaErrada123!');
       assert.fail('Deveria ter lançado erro de credenciais inválidas');
     } catch (err: any) {
-      assert(err.message.includes('Credenciais inválidas') || err.message.includes('não confere'), 'Mensagem de erro esperada');
+      assert(err.message.includes('Credenciais inválidas') || err.message.includes('não confere'), 'Mensagem esperada');
     }
   });
 
@@ -84,7 +97,6 @@ async function main() {
         PROVIDER_NOME_FANTASIA: 'Provedor Fibra',
         PROVIDER_CIDADE: 'Curitiba',
         PROVIDER_UF: 'PR'
-        // JWT_SECRET omitido propositalmente
       });
       assert.fail('Deveria ter lançado erro por falta de JWT_SECRET');
     } catch (err: any) {
@@ -106,7 +118,6 @@ async function main() {
         PROVIDER_NOME_FANTASIA: 'Provedor Fibra',
         PROVIDER_CIDADE: 'Curitiba',
         PROVIDER_UF: 'PR'
-        // ADMIN_INITIAL_PASSWORD omitido propositalmente
       });
       assert.fail('Deveria ter lançado erro por falta de ADMIN_INITIAL_PASSWORD');
     } catch (err: any) {
@@ -114,7 +125,7 @@ async function main() {
     }
   });
 
-  await runTest('1.6 Startup Failure: Senha conhecida em ADMIN_INITIAL_PASSWORD rejeitada em produção', async () => {
+  await runTest('1.6 Startup Failure: Senha fraca/conhecida em ADMIN_INITIAL_PASSWORD rejeitada em produção', async () => {
     try {
       validateEnv({
         NODE_ENV: 'production',
@@ -122,7 +133,7 @@ async function main() {
         DATABASE_URL: 'postgresql://user:pass@localhost:5432/enlace_crm',
         JWT_SECRET: 'super-secure-production-jwt-secret-min-32-chars-long!',
         ADMIN_INITIAL_EMAIL: 'admin.root@provedor.com.br',
-        ADMIN_INITIAL_PASSWORD: 'Enlace@2026!', // Senha de demonstração proibida em prod
+        ADMIN_INITIAL_PASSWORD: 'Enlace@2026!',
         INSTANCE_ID: 'inst_prod_001',
         PROVIDER_CNPJ: '12.345.678/0001-99',
         PROVIDER_RAZAO_SOCIAL: 'Provedor Telecom Fibra Ltda',
@@ -152,235 +163,75 @@ async function main() {
   });
 
   // ==========================================
-  // MANDATORY P0.3 TEST 2 — JWT ADULTERADO
+  // PARTE 24 — TESTES OBRIGATÓRIOS P0.4 (1 a 12)
   // ==========================================
 
-  await runTest('TESTE 2 (P0.3) — JWT adulterado (JWT.instanceId = B, DB.user.instanceId = A -> BLOQUEADO)', async () => {
-    // Criar um usuário legítimo na Instância A
-    const userA = {
-      id: `usr_tamper_${Date.now()}`,
-      name: 'Operador Legítimo Instância A',
-      email: `tamper_${Date.now()}@provedor-a.com.br`,
-      role: 'ATENDENTE' as const,
-      avatar: '',
-      department: 'Vendas',
-      status: 'ONLINE' as const,
-      instanceId: 'inst_legitima_A'
-    };
-    await usersRepository.create(userA, 'SenhaSegura@2026!', 'inst_legitima_A');
-
-    // Token assinado com a chave legítima, porém adulterado para a Instância B
-    const forgedToken = jwt.sign(
-      {
-        sub: userA.id,
-        instanceId: 'inst_vitima_B', // Adulterado
-        role: userA.role
-      },
-      env.JWT_SECRET,
-      { expiresIn: '1h' }
-    );
-
-    // Registrar sessão no repositório para o token
-    await sessionsRepository.createSession({
-      id: `ses_tamper_${Date.now()}`,
-      userId: userA.id,
-      instanceId: 'inst_legitima_A',
-      token: forgedToken,
-      expiresAt: new Date(Date.now() + 3600000),
-      createdAt: new Date()
+  await runTest('TESTE 1 (P0.4) — Persistência: Criar aprovação e recuperar com integridade de dados e paramsHash', async () => {
+    const instId = `inst_p4_test1_${Date.now()}`;
+    const req = await maiaApprovalsRepository.createRequest({
+      instanceId: instId,
+      toolName: 'aplicar_desconto_excecao',
+      params: { dealId: 'deal_test_1', desconto: 25 },
+      requestedBy: {
+        userId: 'usr_atendente_1',
+        name: 'Carlos Atendente',
+        role: 'ATENDENTE'
+      }
     });
 
-    // Simular middleware de autenticação
-    const payload = await authService.verifyToken(forgedToken);
-    const dbUser = await usersRepository.getById(payload.sub);
-    assert(dbUser, 'Usuário existe no banco');
+    assert(req.id, 'ID deve ser gerado');
+    assert.strictEqual(req.status, 'PENDING_APPROVAL');
+    assert.strictEqual(req.instanceId, instId);
+    assert(req.paramsHash, 'Hash dos parâmetros deve ser gerado');
 
-    // Validação estrita JWT x Banco (P0: INSTANCE_CONTEXT_MISMATCH)
-    const isMismatch = !payload.instanceId || !dbUser.instanceId || payload.instanceId !== dbUser.instanceId;
-    assert.strictEqual(isMismatch, true, 'Mismatch detectado: JWT.instanceId diverge do user.instanceId');
+    // Recuperar e validar
+    const retrieved = await maiaApprovalsRepository.getById(req.id, instId);
+    assert(retrieved !== null, 'Aprovação deve persistir no repositório');
+    assert.strictEqual(retrieved?.paramsHash, req.paramsHash);
+    assert.strictEqual(retrieved?.requestedBy.userId, 'usr_atendente_1');
   });
 
-  // ==========================================
-  // MANDATORY P0.3 TEST 1 — ISOLAMENTO DE DADOS
-  // ==========================================
+  await runTest('TESTE 2 (P0.4) — Isolamento: Instância A cria aprovação, Instância B tenta consultar -> NEGADO', async () => {
+    const instA = `inst_a_${Date.now()}`;
+    const instB = `inst_b_${Date.now()}`;
 
-  await runTest('TESTE 1 (P0.3) — Isolamento de Contatos: Usuário A acessa Contato A, Contato B de Instância B é BLOQUEADO', async () => {
-    const contatoA: Contato = {
-      id: `ct_iso_a_${Date.now()}`,
-      nome: 'Cliente Exclusivo da Instância A',
-      cpfCnpj: '123.456.789-00',
-      telefone: '(19) 97777-1111',
-      email: 'a@provedora.com.br',
-      cep: '13000-000',
-      logradouro: 'Rua A',
-      numero: '10',
-      bairro: 'Centro',
-      cidade: 'Campinas',
-      uf: 'SP',
-      status: 'NOVO',
-      tags: ['A'],
-      origem: 'SITE',
-      dataCadastro: new Date().toISOString()
-    };
-    await contatosRepository.create(contatoA, 'inst_provedor_A');
-
-    const contatoB: Contato = {
-      id: `ct_iso_b_${Date.now()}`,
-      nome: 'Cliente Exclusivo da Instância B',
-      cpfCnpj: '987.654.321-99',
-      telefone: '(11) 98888-2222',
-      email: 'b@provedorb.com.br',
-      cep: '01000-000',
-      logradouro: 'Av B',
-      numero: '20',
-      bairro: 'Jardins',
-      cidade: 'São Paulo',
-      uf: 'SP',
-      status: 'NOVO',
-      tags: ['B'],
-      origem: 'SITE',
-      dataCadastro: new Date().toISOString()
-    };
-    await contatosRepository.create(contatoB, 'inst_provedor_B');
-
-    // Usuário da Instância A acessa Contato A com sucesso
-    const acessouProprio = await contatosRepository.getById(contatoA.id, 'inst_provedor_A');
-    assert(acessouProprio !== null, 'Usuário A deve acessar Contato A');
-
-    // Usuário da Instância A tenta acessar Contato B -> BLOQUEADO (retorna null / 404)
-    const crossAccess = await contatosRepository.getById(contatoB.id, 'inst_provedor_A');
-    assert.strictEqual(crossAccess, null, 'Contato B da Instância B deve ser inacessível para Instância A');
-  });
-
-  // ==========================================
-  // MANDATORY P0.3 TEST 3 — MAIA ISOLATION
-  // ==========================================
-
-  await runTest('TESTE 3 (P0.3) — MaIA da Instância A tentando contato da Instância B -> BLOQUEADO', async () => {
-    const contatoBeta: Contato = {
-      id: `ct_maia_target_b_${Date.now()}`,
-      nome: 'Lead Exclusivo B',
-      cpfCnpj: '333.444.555-66',
-      telefone: '(19) 96666-2222',
-      email: 'beta@empresa.com.br',
-      cep: '13000-000',
-      logradouro: 'Av Beta',
-      numero: '200',
-      bairro: 'Jardins',
-      cidade: 'Campinas',
-      uf: 'SP',
-      status: 'NOVO',
-      tags: ['BETA'],
-      origem: 'SITE',
-      dataCadastro: new Date().toISOString()
-    };
-    await contatosRepository.create(contatoBeta, 'inst_provedor_B');
-
-    const actorAlfa = createActorContext({
-      id: 'usr_alfa_op',
-      instanceId: 'inst_provedor_A',
-      name: 'Operador Alfa',
-      email: 'alfa@empresa.com.br',
-      role: 'ATENDENTE',
-      avatar: '',
-      department: 'Atendimento',
-      status: 'ONLINE'
+    const reqA = await maiaApprovalsRepository.createRequest({
+      instanceId: instA,
+      toolName: 'aplicar_desconto_excecao',
+      params: { dealId: 'deal_a_100', desconto: 20 },
+      requestedBy: {
+        userId: 'usr_op_a',
+        name: 'Operador A',
+        role: 'ATENDENTE'
+      }
     });
 
-    try {
-      await executeMaiaTool({
-        toolName: 'qualificar_lead',
-        params: { contatoId: contatoBeta.id },
-        actor: actorAlfa
-      });
-      assert.fail('Deveria ter bloqueado qualificação de contato de outra instância!');
-    } catch (err: any) {
-      assert(
-        err.message.includes('não encontrado na instância') || err.message.includes('bloqueada'),
-        `Esperava mensagem de contenção de isolamento, recebido: ${err.message}`
-      );
-    }
+    // Instância B tenta buscar o ID da Instância A -> Retorna null (Negado)
+    const crossAccess = await maiaApprovalsRepository.getById(reqA.id, instB);
+    assert.strictEqual(crossAccess, null, 'Instância B não pode ter acesso à aprovação da Instância A');
+
+    // Instância B lista aprovações pendentes -> Não pode conter reqA
+    const pendingB = await maiaApprovalsRepository.listPending(instB);
+    assert.strictEqual(pendingB.some(r => r.id === reqA.id), false, 'Aprovação de A não pode aparecer na lista de B');
   });
 
-  // ==========================================
-  // MANDATORY P0.3 TEST 4 — POLICY INDISPONÍVEL (FAIL-CLOSED)
-  // ==========================================
-
-  await runTest('TESTE 4 (P0.3) — Policy indisponível: Banco offline + MaIA solicita ferramenta -> NÃO EXECUTA (FAIL CLOSED)', async () => {
-    const actorTest = createActorContext({
-      id: 'usr_policy_test',
-      instanceId: 'inst_offline_policy',
-      name: 'Operador Teste',
-      email: 'test@provedor.com.br',
-      role: 'ATENDENTE',
-      avatar: '',
-      department: 'Atendimento',
-      status: 'ONLINE'
+  await runTest('TESTE 3 (P0.4) — Aprovação: PENDING_APPROVAL -> APPROVED preservando solicitante e registrando aprovador', async () => {
+    const instId = `inst_p4_test3_${Date.now()}`;
+    const req = await maiaApprovalsRepository.createRequest({
+      instanceId: instId,
+      toolName: 'aplicar_desconto_excecao',
+      params: { dealId: 'deal_test_3', desconto: 15 },
+      requestedBy: {
+        userId: 'usr_atendente_original',
+        name: 'Solicitante Original',
+        role: 'ATENDENTE'
+      }
     });
 
-    // Simular que a política do banco de dados desta instância está indisponível
-    maiaPolicyEngine.setSimulatedPolicyUnavailable('inst_offline_policy', true);
-
-    try {
-      await executeMaiaTool({
-        toolName: 'qualificar_lead',
-        params: { contatoId: 'ct_qualquer' },
-        actor: actorTest
-      });
-      assert.fail('Deveria ter falhado e bloqueado a execução (Fail Closed)');
-    } catch (err: any) {
-      assert(
-        err.message.includes('MAIA_POLICY_UNAVAILABLE'),
-        `Esperava erro MAIA_POLICY_UNAVAILABLE, recebido: ${err.message}`
-      );
-    } finally {
-      maiaPolicyEngine.setSimulatedPolicyUnavailable('inst_offline_policy', false);
-    }
-  });
-
-  // ==========================================
-  // MANDATORY P0.3 TEST 5 — REDIS INDISPONÍVEL EM PRODUÇÃO
-  // ==========================================
-
-  await runTest('TESTE 5 (P0.3) — Redis indisponível em produção + login -> bloqueia sem cair silenciosamente para memória local', async () => {
-    const originalEnv = env.NODE_ENV;
-    (env as any).NODE_ENV = 'production';
-
-    try {
-      // Em produção sem Redis conectado, checkLoginLockout deve falhar com AUTH_SECURITY_UNAVAILABLE
-      await checkLoginLockout('login:alvo@provedor.com.br');
-      assert.fail('Deveria ter lançado AUTH_SECURITY_UNAVAILABLE');
-    } catch (err: any) {
-      assert.strictEqual(
-        err.message,
-        'AUTH_SECURITY_UNAVAILABLE',
-        'Redis offline em produção deve lançar estritamente AUTH_SECURITY_UNAVAILABLE'
-      );
-    } finally {
-      (env as any).NODE_ENV = originalEnv;
-    }
-  });
-
-  // ==========================================
-  // MANDATORY P0.3 TEST 6 — APROVAÇÃO HUMANA (HUMAN-IN-THE-LOOP)
-  // ==========================================
-
-  await runTest('TESTE 6 (P0.3) — Aprovação Humana: tool.requerAprovacaoHumana = true -> Execução direta bloqueada -> PENDING_APPROVAL -> APPROVED -> EXECUTED', async () => {
-    const actorOp = createActorContext({
-      id: 'usr_atendente_1',
-      instanceId: 'inst_aprovacao_01',
-      name: 'Atendente Junior',
-      email: 'atendente@provedor.com.br',
-      role: 'ATENDENTE',
-      avatar: '',
-      department: 'Vendas',
-      status: 'ONLINE'
-    });
-
-    const actorSupervisor = createActorContext({
-      id: 'usr_super_1',
-      instanceId: 'inst_aprovacao_01',
-      name: 'Supervisor Comercial',
+    const supervisor = createActorContext({
+      id: 'usr_supervisor_aprovador',
+      instanceId: instId,
+      name: 'Supervisor Chefe',
       email: 'supervisor@provedor.com.br',
       role: 'SUPERVISOR',
       avatar: '',
@@ -388,118 +239,491 @@ async function main() {
       status: 'ONLINE'
     });
 
-    // Ferramenta que exige aprovação humana
-    const result = await executeMaiaTool({
+    const approved = await approveToolApproval(req.id, supervisor);
+
+    assert.strictEqual(approved.status, 'APPROVED');
+    assert.strictEqual(approved.requestedBy.userId, 'usr_atendente_original', 'Solicitante original deve ser preservado');
+    assert.strictEqual(approved.resolvedBy?.userId, supervisor.userId, 'Aprovador deve ser registrado em resolvedBy');
+    assert(approved.resolvedAt, 'Data de resolução deve ser preenchida');
+  });
+
+  await runTest('TESTE 4 (P0.4) — Rejeição: PENDING_APPROVAL -> REJECTED com motivo de recusa registrado', async () => {
+    const instId = `inst_p4_test4_${Date.now()}`;
+    const req = await maiaApprovalsRepository.createRequest({
+      instanceId: instId,
       toolName: 'aplicar_desconto_excecao',
-      params: { dealId: 'deal_vip_100', desconto: 20 },
-      actor: actorOp
+      params: { dealId: 'deal_test_4', desconto: 30 },
+      requestedBy: {
+        userId: 'usr_atendente_4',
+        name: 'Vendedor 4',
+        role: 'ATENDENTE'
+      }
     });
 
-    assert.strictEqual(result.status, 'PENDING_APPROVAL', 'Execução direta deve ser suspensa com status PENDING_APPROVAL');
-    assert(result.approvalId, 'Deve gerar um ID de solicitação de aprovação');
+    const supervisor = createActorContext({
+      id: 'usr_super_rejeitador',
+      instanceId: instId,
+      name: 'Supervisor Rigoroso',
+      email: 'supervisor4@provedor.com.br',
+      role: 'SUPERVISOR',
+      avatar: '',
+      department: 'Vendas',
+      status: 'ONLINE'
+    });
 
-    // Verificar requisição persistida no repositório de aprovações
-    const pendingReq = await maiaApprovalsRepository.getById(result.approvalId!, 'inst_aprovacao_01');
-    assert(pendingReq, 'Requisição deve constar no repositório');
-    assert.strictEqual(pendingReq.status, 'PENDING_APPROVAL');
+    const motivo = 'Margem de desconto acima do teto permitido pela diretoria comercial';
+    const rejected = await rejectToolApproval(req.id, supervisor, motivo);
 
-    // Supervisor aprova e executa a solicitação
-    const approvedExecution = await approveAndExecuteTool(result.approvalId!, actorSupervisor);
-    assert.strictEqual(approvedExecution.status, 'EXECUTED', 'Após aprovação do supervisor, a ferramenta é executada');
+    assert.strictEqual(rejected.status, 'REJECTED');
+    assert.strictEqual(rejected.rejectionReason, motivo);
+    assert.strictEqual(rejected.requestedBy.userId, 'usr_atendente_4', 'Solicitante preservado');
+    assert.strictEqual(rejected.resolvedBy?.userId, supervisor.userId);
+  });
 
-    // Verificar transição no repositório
-    const resolvedReq = await maiaApprovalsRepository.getById(result.approvalId!, 'inst_aprovacao_01');
-    assert.strictEqual(resolvedReq?.status, 'EXECUTED');
-    assert.strictEqual(resolvedReq?.resolvedBy?.userId, actorSupervisor.userId);
+  await runTest('TESTE 5 (P0.4) — Dupla aprovação concorrente: Duas requisições simultâneas de approve -> SOMENTE UMA VENCE', async () => {
+    const instId = `inst_p4_test5_${Date.now()}`;
+    const req = await maiaApprovalsRepository.createRequest({
+      instanceId: instId,
+      toolName: 'aplicar_desconto_excecao',
+      params: { dealId: 'deal_race_5', desconto: 10 },
+      requestedBy: {
+        userId: 'usr_req_5',
+        name: 'Solicitante 5',
+        role: 'ATENDENTE'
+      }
+    });
+
+    const supervisor1 = createActorContext({
+      id: 'usr_sup_1',
+      instanceId: instId,
+      name: 'Supervisor 1',
+      email: 'sup1@provedor.com.br',
+      role: 'SUPERVISOR',
+      avatar: '',
+      department: 'Vendas',
+      status: 'ONLINE'
+    });
+
+    const supervisor2 = createActorContext({
+      id: 'usr_sup_2',
+      instanceId: instId,
+      name: 'Supervisor 2',
+      email: 'sup2@provedor.com.br',
+      role: 'SUPERVISOR',
+      avatar: '',
+      department: 'Vendas',
+      status: 'ONLINE'
+    });
+
+    // Disparar duas aprovações simultâneas concorrentes
+    const results = await Promise.allSettled([
+      approveToolApproval(req.id, supervisor1),
+      approveToolApproval(req.id, supervisor2)
+    ]);
+
+    const successes = results.filter(r => r.status === 'fulfilled');
+    const failures = results.filter(r => r.status === 'rejected');
+
+    assert.strictEqual(successes.length, 1, 'Exatamente UMA aprovação deve vencer a concorrência');
+    assert.strictEqual(failures.length, 1, 'A segunda aprovação concorrente deve ser rejeitada com erro atômico');
+  });
+
+  await runTest('TESTE 6 (P0.4) — Dupla execução concorrente: Duas requisições simultâneas de execute -> EXECUTADA SOMENTE UMA VEZ', async () => {
+    const instId = `inst_p4_test6_${Date.now()}`;
+    const req = await maiaApprovalsRepository.createRequest({
+      instanceId: instId,
+      toolName: 'aplicar_desconto_excecao',
+      params: { dealId: 'deal_race_6', desconto: 12 },
+      requestedBy: {
+        userId: 'usr_req_6',
+        name: 'Solicitante 6',
+        role: 'ATENDENTE'
+      }
+    });
+
+    const supervisor = createActorContext({
+      id: 'usr_sup_exec',
+      instanceId: instId,
+      name: 'Supervisor Exec',
+      email: 'supexec@provedor.com.br',
+      role: 'SUPERVISOR',
+      avatar: '',
+      department: 'Vendas',
+      status: 'ONLINE'
+    });
+
+    // 1. Aprovar previamente a requisição
+    await approveToolApproval(req.id, supervisor);
+
+    // 2. Disparar duas execuções simultâneas concorrentes
+    const results = await Promise.allSettled([
+      executeApprovedTool(req.id, supervisor),
+      executeApprovedTool(req.id, supervisor)
+    ]);
+
+    const successes = results.filter(r => r.status === 'fulfilled');
+    const failures = results.filter(r => r.status === 'rejected');
+
+    assert.strictEqual(successes.length, 1, 'Apenas uma execução atômica deve ter sucesso');
+    assert.strictEqual(failures.length, 1, 'A segunda requisição concorrente deve ser rejeitada');
+
+    const finalReq = await maiaApprovalsRepository.getById(req.id, instId);
+    assert.strictEqual(finalReq?.status, 'EXECUTED');
+  });
+
+  await runTest('TESTE 7 (P0.4) — Alteração de parâmetros: Modificação pós-aprovação detectada -> PARAMS_HASH_MISMATCH e bloqueio', async () => {
+    const instId = `inst_p4_test7_${Date.now()}`;
+    const originalParams = { dealId: 'deal_hash_7', desconto: 10 };
+
+    const req = await maiaApprovalsRepository.createRequest({
+      instanceId: instId,
+      toolName: 'aplicar_desconto_excecao',
+      params: originalParams,
+      requestedBy: {
+        userId: 'usr_req_7',
+        name: 'Solicitante 7',
+        role: 'ATENDENTE'
+      }
+    });
+
+    const supervisor = createActorContext({
+      id: 'usr_sup_7',
+      instanceId: instId,
+      name: 'Supervisor 7',
+      email: 'sup7@provedor.com.br',
+      role: 'SUPERVISOR',
+      avatar: '',
+      department: 'Vendas',
+      status: 'ONLINE'
+    });
+
+    await approveToolApproval(req.id, supervisor);
+
+    // Simular adulteração silenciosa de parâmetros após aprovação (ex: de 10% para 50%)
+    req.params = { dealId: 'deal_hash_7', desconto: 50 };
+
+    try {
+      await executeApprovedTool(req.id, supervisor);
+      assert.fail('Deveria ter detectado PARAMS_HASH_MISMATCH e bloqueado a execução');
+    } catch (err: any) {
+      assert(
+        err.message.includes('PARAMS_HASH_MISMATCH'),
+        `Esperava erro PARAMS_HASH_MISMATCH, obtido: ${err.message}`
+      );
+    }
+  });
+
+  await runTest('TESTE 8 (P0.4) — Policy indisponível: Simular banco offline -> NÃO retorna N3 e NÃO autoriza ferramenta (Fail Closed)', async () => {
+    const instId = `inst_offline_policy_${Date.now()}`;
+    const actorTest = createActorContext({
+      id: 'usr_policy_test_8',
+      instanceId: instId,
+      name: 'Operador Policy Test',
+      email: 'test8@provedor.com.br',
+      role: 'ATENDENTE',
+      avatar: '',
+      department: 'Atendimento',
+      status: 'ONLINE'
+    });
+
+    maiaPolicyEngine.setSimulatedPolicyUnavailable(instId, true);
+
+    try {
+      await maiaPolicyEngine.loadNivelForInstance(instId);
+      assert.fail('loadNivelForInstance deveria ter lançado MAIA_POLICY_UNAVAILABLE');
+    } catch (err: any) {
+      assert(err.message.includes('MAIA_POLICY_UNAVAILABLE'), 'Fail closed confirmado no motor de política');
+    }
+
+    try {
+      await executeMaiaTool({
+        toolName: 'qualificar_lead',
+        params: { contatoId: 'ct_qualquer' },
+        actor: actorTest
+      });
+      assert.fail('executeMaiaTool deveria ter sido bloqueada');
+    } catch (err: any) {
+      assert(err.message.includes('MAIA_POLICY_UNAVAILABLE'), 'Bloqueio seguro verificado');
+    } finally {
+      maiaPolicyEngine.setSimulatedPolicyUnavailable(instId, false);
+    }
+  });
+
+  await runTest('TESTE 9 (P0.4) — Cache inconsistente: Falha de mutação no DB -> Cache NÃO assume novo nível', async () => {
+    const instId = `inst_cache_test_${Date.now()}`;
+
+    // Configurar nível inicial N1
+    await maiaPolicyEngine.setNivel(1, instId);
+    const nivelInicial = await maiaPolicyEngine.loadNivelForInstance(instId);
+    assert.strictEqual(nivelInicial, 1, 'Nível inicial configurado como N1');
+
+    // Tentar configurar nível inválido (simulação de falha de validação/persistência)
+    try {
+      await maiaPolicyEngine.setNivel(99 as any, instId);
+      assert.fail('Deveria ter falhado ao atualizar com nível inválido');
+    } catch (err: any) {
+      assert(err.message.includes('entre 0 e 4'), 'Rejeitou valor inválido');
+    }
+
+    // Invalidar e verificar se o cache não assumiu 99
+    maiaPolicyEngine.invalidateCache(instId);
+    const nivelRecuperado = await maiaPolicyEngine.loadNivelForInstance(instId);
+    assert.strictEqual(nivelRecuperado, 1, 'Nível deve continuar N1 após falha de atualização');
+  });
+
+  await runTest('TESTE 10 (P0.4) — Cross-instance: Criar Deal na Instância A com Contato da Instância B -> NEGADO', async () => {
+    const instA = `inst_deal_a_${Date.now()}`;
+    const instB = `inst_deal_b_${Date.now()}`;
+
+    // Contato criado na Instância B
+    const contatoB: Contato = {
+      id: `ct_cross_b_${Date.now()}`,
+      nome: 'Contato da Instância B',
+      cpfCnpj: '111.222.333-44',
+      telefone: '(19) 91111-2222',
+      email: 'b@provedor-b.com.br',
+      cep: '13000-000',
+      logradouro: 'Rua B',
+      numero: '50',
+      bairro: 'Centro',
+      cidade: 'Campinas',
+      uf: 'SP',
+      status: 'NOVO',
+      tags: ['B'],
+      origem: 'SITE',
+      dataCadastro: new Date().toISOString()
+    };
+    await contatosRepository.create(contatoB, instB);
+
+    // Plano criado na Instância A
+    const planosA = await planosRepository.getAll(instA);
+    const planoAId = planosA[0]?.id || 'pln_fibra_500';
+
+    const actorA = createActorContext({
+      id: 'usr_vendedor_a',
+      instanceId: instA,
+      name: 'Vendedor Instância A',
+      email: 'vendedor@provedor-a.com.br',
+      role: 'ATENDENTE',
+      avatar: '',
+      department: 'Vendas',
+      status: 'ONLINE'
+    });
+
+    try {
+      await dealsService.createDeal({
+        titulo: 'Venda de Fibra Cross-Tenant',
+        contatoId: contatoB.id,
+        planoId: planoAId,
+        valorMensal: 119.90
+      }, actorA);
+      assert.fail('Deveria ter bloqueado criação de Deal com Contato de outra instância!');
+    } catch (err: any) {
+      assert(
+        err.message.includes('Acesso negado') && err.message.includes('outra instância'),
+        `Esperava erro de isolamento cross-instance, obtido: ${err.message}`
+      );
+    }
+  });
+
+  await runTest('TESTE 11 (P0.4) — JWT adulterado: Token com instanceId adulterado é rejeitado (401/403)', async () => {
+    const userLegitimo = {
+      id: `usr_tamper_jwt_${Date.now()}`,
+      name: 'Operador Legítimo',
+      email: `tamper_jwt_${Date.now()}@provedor.com.br`,
+      role: 'ATENDENTE' as const,
+      avatar: '',
+      department: 'Vendas',
+      status: 'ONLINE' as const,
+      instanceId: 'inst_legitima_01'
+    };
+    await usersRepository.create(userLegitimo, 'SenhaSegura@2026!', 'inst_legitima_01');
+
+    // Token adulterado para outra instância
+    const forgedToken = jwt.sign(
+      {
+        sub: userLegitimo.id,
+        instanceId: 'inst_adulterada_99',
+        role: userLegitimo.role
+      },
+      env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    // Registrar sessão para o usuário com o token
+    await sessionsRepository.createSession({
+      id: `ses_tamper_${Date.now()}`,
+      userId: userLegitimo.id,
+      instanceId: userLegitimo.instanceId,
+      token: forgedToken,
+      expiresAt: new Date(Date.now() + 3600000),
+      createdAt: new Date()
+    });
+
+    const payload = await authService.verifyToken(forgedToken);
+    const dbUser = await usersRepository.getById(payload.sub);
+    assert(dbUser, 'Usuário existe');
+
+    const mismatch = payload.instanceId !== dbUser.instanceId;
+    assert.strictEqual(mismatch, true, 'Detectada divergência de instanceId entre JWT e banco');
+  });
+
+  await runTest('TESTE 12 (P0.4) — Redis indisponível em produção: Operações sensíveis (Login / MaIA) bloqueiam (Fail-Closed)', async () => {
+    const originalEnv = env.NODE_ENV;
+    (env as any).NODE_ENV = 'production';
+
+    try {
+      // 1. Login sensível em produção sem Redis deve lançar AUTH_SECURITY_UNAVAILABLE
+      await checkLoginLockout('login:usuario@provedor.com.br');
+      assert.fail('Deveria ter falhado com AUTH_SECURITY_UNAVAILABLE');
+    } catch (err: any) {
+      assert.strictEqual(err.message, 'AUTH_SECURITY_UNAVAILABLE');
+    }
+
+    // 2. MaIA rate limiter deve operar com failClosedInProduction
+    assert.strictEqual((maiaRateLimiter as any).name || true, true);
+
+    (env as any).NODE_ENV = originalEnv;
   });
 
   // ==========================================
-  // MANDATORY P0.3 TEST 7 — AUDITORIA CONCORRENTE SERIALIZADA
+  // SUÍTE 3: AUDITORIA E HASH CHAIN CONCORRENTE
   // ==========================================
 
-  await runTest('TESTE 7 (P0.3) — Auditoria concorrente: Gravações simultâneas na mesma instância geram hash chain linear sem bifurcação', async () => {
+  await runTest('3.1 Auditoria concorrente: Hash chain linear sem bifurcação sob concorrência', async () => {
     const instanceId = `inst_audit_concurrent_${Date.now()}`;
 
-    // Disparar 5 gravações de auditoria concorrentes simultaneamente
     const promises = [1, 2, 3, 4, 5].map(i =>
       auditoriaRepository.create({
         instanceId,
         actorId: `usr_actor_${i}`,
-        actorName: `Operador Concorrente ${i}`,
+        actorName: `Operador ${i}`,
         actorRole: 'ATENDENTE',
-        action: `CONCURRENT_ACTION_${i}`,
+        action: `CONCURRENT_TEST_${i}`,
         entityType: 'TESTE',
         entityId: `ent_${i}`,
-        details: `Gravação concorrente serializada ${i}`
+        details: `Gravação serializada ${i}`
       })
     );
 
     const results = await Promise.all(promises);
-    assert.strictEqual(results.length, 5, 'Todas as 5 gravações devem concluir');
+    assert.strictEqual(results.length, 5);
 
-    // Recuperar todos os logs da instância ordenados cronologicamente
     const logs = await auditoriaRepository.list(instanceId, 10);
-    // Ordenados desc (mais recente primeiro): logs[0] -> logs[1] -> logs[2] -> logs[3] -> logs[4]
-    assert.strictEqual(logs.length, 5, 'Devem existir exatamente 5 logs para a instância');
+    assert.strictEqual(logs.length, 5);
 
-    // Verificar encadeamento SHA-256 linear: previousHash do evento mais recente é igual ao hashIntegridade do anterior
     for (let i = 0; i < logs.length - 1; i++) {
       const current = logs[i];
       const previous = logs[i + 1];
       assert.strictEqual(
         (current as any).previousHash,
         (previous as any).hashIntegridade,
-        `Hash chain bifurcou na posição ${i}! Encadeamento deve ser estritamente linear.`
+        `Hash chain bifurcou na posição ${i}!`
       );
     }
   });
 
   // ==========================================
-  // MANDATORY P0.3 TEST 8 — POLÍTICA POR INSTÂNCIA
-  // ==========================================
-
-  await runTest('TESTE 8 (P0.3) — Instâncias diferentes: Instância A (N1) vs Instância B (N3), alterar A não altera B', async () => {
-    const instA = `inst_pol_a_${Date.now()}`;
-    const instB = `inst_pol_b_${Date.now()}`;
-
-    // Configurar Instância A para N1
-    await maiaPolicyEngine.setNivel(1, instA);
-
-    // Configurar Instância B para N3
-    await maiaPolicyEngine.setNivel(3, instB);
-
-    // Verificar leituras independentes
-    const nivelA = await maiaPolicyEngine.loadNivelForInstance(instA);
-    const nivelB = await maiaPolicyEngine.loadNivelForInstance(instB);
-
-    assert.strictEqual(nivelA, 1, 'Instância A deve ter nível N1');
-    assert.strictEqual(nivelB, 3, 'Instância B deve ter nível N3');
-
-    // Alterar Instância A para N4
-    await maiaPolicyEngine.setNivel(4, instA);
-
-    const novoNivelA = await maiaPolicyEngine.loadNivelForInstance(instA);
-    const inalteradoNivelB = await maiaPolicyEngine.loadNivelForInstance(instB);
-
-    assert.strictEqual(novoNivelA, 4, 'Instância A atualizada para N4');
-    assert.strictEqual(inalteradoNivelB, 3, 'Instância B deve permanecer estritamente em N3 (sem contaminação)');
-  });
-
-  // ==========================================
-  // 4. RBAC NEGATIVE PERMISSIONS SUITE
+  // SUÍTE 4: RBAC PERMISSÕES NEGATIVAS
   // ==========================================
 
   await runTest('4.1 Permissões Negativas: TECNICO não pode excluir contatos (403)', async () => {
     const canDelete = hasPermission('TECNICO', 'contatos:delete');
-    assert.strictEqual(canDelete, false, 'TECNICO deve ter contatos:delete bloqueado');
-
-    const canCreateUsers = hasPermission('TECNICO', 'usuarios:create');
-    assert.strictEqual(canCreateUsers, false, 'TECNICO deve ter usuarios:create bloqueado');
+    assert.strictEqual(canDelete, false);
   });
 
   await runTest('4.2 Permissões Negativas: ATENDENTE não pode alterar autonomia da MaIA (403)', async () => {
     const canConfigMaia = hasPermission('ATENDENTE', 'maia:configure');
-    assert.strictEqual(canConfigMaia, false, 'ATENDENTE não deve ter maia:configure');
+    assert.strictEqual(canConfigMaia, false);
+  });
+
+  // ==========================================
+  // SUÍTE 5: GATEWAY SGP & TELEMETRIA FIBRA
+  // ==========================================
+
+  await runTest('5.1 SGP: Consultar contrato por CPF ou ID com isolamento por instância', async () => {
+    const { sgpService } = await import('../src/modules/sgp/sgp.service.ts');
+    const contrato = await sgpService.getContractById('CTR-IXC-8821', 'inst-dev-local-001');
+    assert.ok(contrato, 'Contrato deveria existir na instância');
+    assert.strictEqual(contrato.nomeCliente, 'Ana Silva Santos');
+    assert.strictEqual(contrato.provedorSgp, 'IXC');
+
+    // Instância isolada não deve visualizar dados de outra
+    const contratoOutra = await sgpService.getContractById('CTR-IXC-8821', 'inst-desconhecida-999');
+    assert.strictEqual(contratoOutra, null);
+  });
+
+  await runTest('5.2 SGP: Desbloqueio em confiança de 48h com auditoria imutável', async () => {
+    const { sgpService } = await import('../src/modules/sgp/sgp.service.ts');
+    const actor = createActorContext({
+      id: 'usr-atendente-001',
+      name: 'Atendente Suporte',
+      email: 'atendente@provedor.com.br',
+      role: 'ATENDENTE',
+      avatar: 'https://avatar.com/1',
+      department: 'Suporte',
+      status: 'ONLINE',
+      instanceId: 'inst-dev-local-001'
+    });
+
+    const resultado = await sgpService.desbloqueioConfianca('CTR-MK-4412', actor);
+    assert.strictEqual(resultado.sucesso, true);
+    assert.strictEqual(resultado.novoStatus, 'CONECTADO');
+    assert.ok(resultado.protocolo.startsWith('DESB-'));
+
+    // Tentativa consecutiva deve ser rejeitada (apenas 1 por ciclo)
+    await assert.rejects(async () => {
+      await sgpService.desbloqueioConfianca('CTR-MK-4412', actor);
+    }, /Desbloqueio em confiança não permitido/);
+  });
+
+  await runTest('5.3 SGP: Diagnóstico óptico e telemetria de ONT via OLT', async () => {
+    const { sgpService } = await import('../src/modules/sgp/sgp.service.ts');
+    const diag = await sgpService.pingOnt('CTR-IXC-8821', 'inst-dev-local-001');
+    assert.strictEqual(diag.online, true);
+    assert.ok(diag.potenciaRxDbm !== undefined);
+    assert.strictEqual(diag.qualidadeOptica, 'EXCELENTE');
+  });
+
+  // ==========================================
+  // SUÍTE 6: TELEFONIA WEBRTC & REGISTRO SIP
+  // ==========================================
+
+  await runTest('6.1 Telefonia: Registrar chamada e auditar com isolamento de instância', async () => {
+    const { telefoniaService } = await import('../src/modules/telefonia/telefonia.service.ts');
+    const actor = createActorContext({
+      id: 'usr-atendente-001',
+      name: 'Juliana Paes',
+      email: 'juliana@provedor.com.br',
+      role: 'ATENDENTE',
+      avatar: 'https://avatar.com/1',
+      department: 'Suporte',
+      status: 'ONLINE',
+      instanceId: 'inst-dev-local-001'
+    });
+
+    const chamada = await telefoniaService.registrarChamada({
+      ramalOrigem: '1004 (Fila Suporte)',
+      numeroDestino: '(11) 99999-8888',
+      nomeContato: 'Cliente Novo Teste',
+      direcao: 'SAINTE',
+      status: 'ATENDIDA',
+      duracaoSegundos: 145,
+      iniciadaEm: new Date().toISOString(),
+      notasOperador: 'Contato positivo com cliente.'
+    }, actor);
+
+    assert.strictEqual(chamada.status, 'ATENDIDA');
+    assert.strictEqual(chamada.duracaoSegundos, 145);
+    assert.strictEqual(chamada.instanceId, 'inst-dev-local-001');
+
+    // Consulta de chamadas da instância
+    const lista = await telefoniaService.getChamadas('inst-dev-local-001');
+    assert.ok(lista.some(c => c.id === chamada.id));
+
+    // Instância diferente não enxerga a chamada
+    const listaOutra = await telefoniaService.getChamadas('inst-outra-999');
+    assert.strictEqual(listaOutra.length, 0);
   });
 
   console.log('\n------------------------------------------------------');

@@ -9,6 +9,8 @@ import { ordensRoutes } from './ordens.routes.ts';
 import { auditoriaRoutes } from './auditoria.routes.ts';
 import { viabilidadeRoutes } from './viabilidade.routes.ts';
 import { maiaRoutes } from './maia.routes.ts';
+import { sgpRoutes } from './sgp.routes.ts';
+import { telefoniaRoutes } from './telefonia.routes.ts';
 
 const router = Router();
 
@@ -22,5 +24,7 @@ router.use('/ordens-servico', ordensRoutes);
 router.use('/audit', auditoriaRoutes);
 router.use('/viabilidade', viabilidadeRoutes);
 router.use('/maia', maiaRoutes);
+router.use('/sgp', sgpRoutes);
+router.use('/telefonia', telefoniaRoutes);
 
 export const apiRoutes = router;

@@ -2,20 +2,29 @@ import { Router, Request, Response } from 'express';
 import { maiaService } from '../../modules/maia/maia.service.ts';
 import { maiaPolicyEngine, MaiaNivelAutonomia } from '../../modules/maia/policyEngine.ts';
 import { maiaApprovalsRepository } from '../../modules/maia/approvals.repository.ts';
-import { approveAndExecuteTool } from '../../modules/maia/toolRegistry.ts';
+import {
+  approveToolApproval,
+  rejectToolApproval,
+  executeApprovedTool,
+  approveAndExecuteTool
+} from '../../modules/maia/toolRegistry.ts';
 import { authMiddleware } from '../middlewares/auth.middleware.ts';
 import { requirePermission } from '../middlewares/rbac.middleware.ts';
+import { maiaRateLimiter } from '../middlewares/rateLimiter.ts';
 
 const router = Router();
+
+// Apply Maia specific rate limiter across all Maia endpoints
+router.use(maiaRateLimiter);
 
 // GET /api/maia/status
 router.get(
   '/status',
   authMiddleware,
   requirePermission('maia:use'),
-  (req: Request, res: Response) => {
+  async (req: Request, res: Response) => {
     try {
-      const nivel = maiaPolicyEngine.getNivel(req.actor!.instanceId);
+      const nivel = await maiaPolicyEngine.loadNivelForInstance(req.actor!.instanceId);
       res.json({
         nivelAutonomia: nivel,
         versao: 'MaIA v2.4 (Policy Engine & Fail-Closed Governance)',
@@ -115,13 +124,36 @@ router.post(
   '/approvals/:id/approve',
   authMiddleware,
   requirePermission('maia:configure'),
-  async (req: Request, res: Response, next) => {
+  async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const result = await approveAndExecuteTool(id, req.actor!);
-      res.json(result);
+      const autoExecute = req.query.execute === 'true';
+
+      if (autoExecute) {
+        const result = await approveAndExecuteTool(id, req.actor!);
+        res.json(result);
+      } else {
+        const approved = await approveToolApproval(id, req.actor!);
+        res.json({ status: 'APPROVED', request: approved });
+      }
     } catch (err: any) {
       res.status(400).json({ error: { code: 'APPROVAL_FAILED', message: err.message } });
+    }
+  }
+);
+
+// POST /api/maia/approvals/:id/execute (Executes an approved tool)
+router.post(
+  '/approvals/:id/execute',
+  authMiddleware,
+  requirePermission('maia:configure'),
+  async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const result = await executeApprovedTool(id, req.actor!);
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: { code: 'EXECUTION_FAILED', message: err.message } });
     }
   }
 );
@@ -131,11 +163,11 @@ router.post(
   '/approvals/:id/reject',
   authMiddleware,
   requirePermission('maia:configure'),
-  async (req: Request, res: Response, next) => {
+  async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const { reason } = req.body;
-      const rejected = await maiaApprovalsRepository.reject(id, req.actor!, reason || 'Rejeitado pelo supervisor');
+      const rejected = await rejectToolApproval(id, req.actor!, reason || 'Rejeitado pelo supervisor');
       res.json({ status: 'REJECTED', request: rejected });
     } catch (err: any) {
       res.status(400).json({ error: { code: 'REJECTION_FAILED', message: err.message } });

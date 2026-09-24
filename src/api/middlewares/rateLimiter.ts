@@ -118,9 +118,9 @@ export const maiaRateLimiter = createRateLimiter({
   name: 'maia_copilot',
   windowMs: 60 * 1000, // 1 minute
   max: 30,
-  failClosedInProduction: false,
+  failClosedInProduction: true, // P0 PARTE 17: Operações sensíveis da MaIA bloqueadas se Redis indisponível em produção
   message: 'Limite de consultas simultâneas ao copiloto MaIA excedido.',
-  keyGenerator: (req) => `${req.user?.id || req.ip}`
+  keyGenerator: (req) => `${req.user?.id || req.actor?.userId || req.ip}`
 });
 
 export const viabilidadeRateLimiter = createRateLimiter({

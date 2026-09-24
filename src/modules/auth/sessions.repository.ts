@@ -6,7 +6,7 @@ import { env } from '../../config/env.ts';
 export interface SessionRecord {
   id: string;
   userId: string;
-  instanceId?: string;
+  instanceId: string;
   token: string;
   ipAddress?: string;
   userAgent?: string;
@@ -19,6 +19,10 @@ class SessionsRepository {
   private fallbackSessions = new Map<string, SessionRecord>();
 
   async createSession(session: SessionRecord): Promise<void> {
+    if (!session.instanceId || session.instanceId.trim() === '') {
+      throw new Error('instanceId é estritamente obrigatório para registrar sessão.');
+    }
+
     if (isDbConnected()) {
       await db.insert(sessionsTable).values({
         id: session.id,
@@ -58,7 +62,7 @@ class SessionsRepository {
       return {
         id: s.id,
         userId: s.userId,
-        instanceId: s.instanceId || undefined,
+        instanceId: s.instanceId,
         token: s.token,
         ipAddress: s.ipAddress || undefined,
         userAgent: s.userAgent || undefined,

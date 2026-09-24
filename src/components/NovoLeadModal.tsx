@@ -19,11 +19,11 @@ export const NovoLeadModal: React.FC<NovoLeadModalProps> = ({
   const [telefone, setTelefone] = useState('');
   const [email, setEmail] = useState('');
   const [cpfCnpj, setCpfCnpj] = useState('');
-  const [cep, setCep] = useState('13024-000');
+  const [cep, setCep] = useState('');
   const [logradouro, setLogradouro] = useState('');
   const [numero, setNumero] = useState('');
-  const [bairro, setBairro] = useState('Cambuí');
-  const [cidade, setCidade] = useState('Campinas');
+  const [bairro, setBairro] = useState('');
+  const [cidade, setCidade] = useState('');
   const [planoId, setPlanoId] = useState(planos[0]?.id || '');
   const [origem, setOrigem] = useState<'WHATSAPP' | 'WEBCHAT' | 'SITE' | 'INDICACAO'>('WHATSAPP');
 

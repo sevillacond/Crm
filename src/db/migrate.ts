@@ -16,14 +16,18 @@ export async function runMigrations(): Promise<boolean> {
   const client = await pool.connect();
   try {
     console.log('[MIGRATE] Executando migrações no PostgreSQL 16...');
-    const migrationFile = path.resolve(__dirname, 'migrations', '0000_initial.sql');
-    if (fs.existsSync(migrationFile)) {
-      const sql = fs.readFileSync(migrationFile, 'utf8');
-      await client.query(sql);
-      console.log('[MIGRATE] Migrações executadas com sucesso.');
+    const migrationsDir = path.resolve(__dirname, 'migrations');
+    if (fs.existsSync(migrationsDir)) {
+      const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith('.sql')).sort();
+      for (const file of files) {
+        console.log(`[MIGRATE] Aplicando migration: ${file}...`);
+        const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+        await client.query(sql);
+      }
+      console.log(`[MIGRATE] ${files.length} migrações executadas com sucesso.`);
       return true;
     } else {
-      console.warn('[MIGRATE] Arquivo 0000_initial.sql não encontrado.');
+      console.warn('[MIGRATE] Diretório migrations não encontrado.');
       return false;
     }
   } catch (error: any) {

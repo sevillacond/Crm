@@ -1,4 +1,6 @@
 import { dealsRepository, DealHistoryEntry } from './deals.repository.ts';
+import { contatosRepository } from '../contatos/contatos.repository.ts';
+import { planosRepository } from '../planos/planos.repository.ts';
 import { Deal, DealEtapa } from '../../types/index.ts';
 import { auditoriaService } from '../auditoria/auditoria.service.ts';
 import { ActorContext } from '../auth/actorContext.ts';
@@ -40,6 +42,23 @@ class DealsService {
     input: CreateDealInput,
     actor: ActorContext
   ): Promise<Deal> {
+    if (!actor || !actor.instanceId) {
+      throw new Error('Acesso negado: Contexto de autorização ou instanceId ausente.');
+    }
+
+    // P0 PARTE 18: Integridade e isolamento estrito entre entidades
+    // Validar se o contato existe e pertence estritamente à instância do ator
+    const contato = await contatosRepository.getById(input.contatoId, actor.instanceId);
+    if (!contato) {
+      throw new Error(`Acesso negado: Contato ${input.contatoId} não encontrado ou pertence a outra instância.`);
+    }
+
+    // Validar se o plano existe e pertence estritamente à instância do ator
+    const plano = await planosRepository.getById(input.planoId, actor.instanceId);
+    if (!plano) {
+      throw new Error(`Acesso negado: Plano ${input.planoId} não encontrado ou pertence a outra instância.`);
+    }
+
     const newId = `dl_${Date.now().toString().slice(-6)}`;
     const etapa = input.etapa || 'NOVO_LEAD';
     const probabilidade = input.probabilidade !== undefined
@@ -73,7 +92,7 @@ class DealsService {
       action: 'DEAL_CREATED',
       entityType: 'DEAL',
       entityId: saved.id,
-      details: `Negócio "${saved.titulo}" criado no valor de R$ ${saved.valorMensal.toFixed(2)}/mês`,
+      details: `Negócio "${saved.titulo}" criado no valor de R$ ${saved.valorMensal.toFixed(2)}/mês associado ao contato ${contato.nome}`,
       dadosPosteriores: saved
     });
 

@@ -35,42 +35,26 @@ export class MaiaPolicyEngine {
     this.instancePolicyCache.delete(instanceId);
   }
 
-  getNivel(instanceId?: string): MaiaNivelAutonomia {
-    if (!instanceId) {
-      if (env.NODE_ENV === 'production') {
-        throw new Error('MAIA_POLICY_UNAVAILABLE: instanceId é estritamente obrigatório em produção.');
-      }
-      return 3;
-    }
-
-    if (this.simulatedUnavailable.has(instanceId)) {
-      throw new Error('MAIA_POLICY_UNAVAILABLE');
-    }
-
-    const cached = this.instancePolicyCache.get(instanceId);
-    if (cached && (Date.now() - cached.cachedAt) < this.CACHE_TTL_MS) {
-      return cached.nivel;
-    }
-
-    return 3;
-  }
-
+  /**
+   * P0: Única fonte da verdade de leitura de autonomia.
+   * Não possui fallbacks fictícios (sempre Fail-Closed se indisponível).
+   */
   async loadNivelForInstance(instanceId: string): Promise<MaiaNivelAutonomia> {
     if (!instanceId || instanceId.trim() === '') {
       throw new Error('MAIA_POLICY_UNAVAILABLE: instanceId é estritamente obrigatório.');
     }
 
-    // P0: Teste / Simulação de indisponibilidade
+    // 1. Simulação explícita de indisponibilidade para testes de segurança
     if (this.simulatedUnavailable.has(instanceId)) {
       throw new Error('MAIA_POLICY_UNAVAILABLE');
     }
 
-    // P0: Fail-closed em produção se banco de dados estiver indisponível
+    // 2. Fail-closed em produção se banco de dados estiver desconectado
     if (env.NODE_ENV === 'production' && !isDbConnected()) {
-      throw new Error('MAIA_POLICY_UNAVAILABLE');
+      throw new Error('MAIA_POLICY_UNAVAILABLE: Banco de dados PostgreSQL indisponível em produção.');
     }
 
-    // Verificar se existe no cache válido
+    // 3. Cache como otimização transitória (não autoridade)
     const cached = this.instancePolicyCache.get(instanceId);
     if (cached && (Date.now() - cached.cachedAt) < this.CACHE_TTL_MS) {
       return cached.nivel;
@@ -84,31 +68,46 @@ export class MaiaPolicyEngine {
         return nivel;
       }
 
-      if (env.NODE_ENV === 'production') {
-        throw new Error('MAIA_POLICY_UNAVAILABLE');
-      }
-
-      // Em dev/test apenas: inicializar nível padrão local
-      const defaultNivel: MaiaNivelAutonomia = 3;
-      this.instancePolicyCache.set(instanceId, { nivel: defaultNivel, cachedAt: Date.now() });
-      return defaultNivel;
+      // Se a instância não foi localizada no banco, fail closed
+      throw new Error(`MAIA_POLICY_UNAVAILABLE: Política não configurada para a instância ${instanceId}.`);
     } catch (err: any) {
       if (err.message.includes('MAIA_POLICY_UNAVAILABLE')) {
         throw err;
       }
-      if (env.NODE_ENV === 'production') {
-        throw new Error('MAIA_POLICY_UNAVAILABLE');
-      }
-      throw err;
+      throw new Error(`MAIA_POLICY_UNAVAILABLE: ${err.message}`);
     }
   }
 
+  /**
+   * Alias assíncrono para garantir que GET /maia/status e POST /maia/chat consultem a mesma fonte
+   */
+  async getNivel(instanceId: string): Promise<MaiaNivelAutonomia> {
+    return this.loadNivelForInstance(instanceId);
+  }
+
+  /**
+   * P0: Atualização consistente de política de autonomia.
+   * Regra PARTE 12:
+   * 1. Invalida cache preventivamente
+   * 2. UPDATE PostgreSQL (Autoridade)
+   * 3. Sucesso -> registrar cache atualizado
+   */
   async setNivel(nivel: MaiaNivelAutonomia, instanceId: string): Promise<void> {
     if (!instanceId || instanceId.trim() === '') {
       throw new Error('instanceId é obrigatório para alterar nível de autonomia.');
     }
-    this.instancePolicyCache.set(instanceId, { nivel, cachedAt: Date.now() });
+    if (typeof nivel !== 'number' || nivel < 0 || nivel > 4) {
+      throw new Error('Nível de autonomia deve ser um número entre 0 e 4.');
+    }
+
+    // Invalidação prévia para evitar leituras inconsistentes durante mutação
+    this.instancePolicyCache.delete(instanceId);
+
+    // Persistência no PostgreSQL (Autoridade única)
     await instancesRepository.update(instanceId, { maiaNivelAutonomia: nivel });
+
+    // Apenas após sucesso no PostgreSQL, atualizar cache de leitura
+    this.instancePolicyCache.set(instanceId, { nivel, cachedAt: Date.now() });
   }
 
   async evaluateToolExecution(

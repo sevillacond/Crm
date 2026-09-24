@@ -25,10 +25,10 @@ export const ViabilidadeModal: React.FC<ViabilidadeModalProps> = ({
   onClose,
   onApplyResult
 }) => {
-  const [cep, setCep] = useState<string>(contato?.cep || '13024-000');
-  const [numero, setNumero] = useState<string>(contato?.numero || '450');
-  const [bairro, setBairro] = useState<string>(contato?.bairro || 'Cambuí');
-  const [cidade, setCidade] = useState<string>(contato?.cidade || 'Campinas');
+  const [cep, setCep] = useState<string>(contato?.cep || '');
+  const [numero, setNumero] = useState<string>(contato?.numero || '');
+  const [bairro, setBairro] = useState<string>(contato?.bairro || '');
+  const [cidade, setCidade] = useState<string>(contato?.cidade || '');
   const [loading, setLoading] = useState<boolean>(false);
   const [result, setResult] = useState<ViabilidadeConsulta | null>(null);
 

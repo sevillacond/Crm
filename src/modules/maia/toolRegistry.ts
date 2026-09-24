@@ -4,17 +4,29 @@ import { contatosRepository } from '../contatos/contatos.repository.ts';
 import { auditoriaService } from '../auditoria/auditoria.service.ts';
 import { ActorContext } from '../auth/actorContext.ts';
 import { maiaPolicyEngine } from './policyEngine.ts';
-import { maiaApprovalsRepository, MaiaApprovalRequest } from './approvals.repository.ts';
+import {
+  maiaApprovalsRepository,
+  MaiaApprovalRequest,
+  calculateParamsHash
+} from './approvals.repository.ts';
 import { MaiaToolDefinition, MaiaToolExecutionResult, ExecuteToolOptions } from './toolTypes.ts';
 
 // Internal raw implementations
 const RAW_TOOL_IMPLEMENTATIONS: Record<string, (params: any, actor: ActorContext) => Promise<any>> = {
   consultar_viabilidade: async (params, actor) => {
-    return viabilidadeService.consultar(
+    // P0: Não utilizar dados fictícios como fallback (13024-000 / 100)
+    if (!params?.cep || typeof params.cep !== 'string' || params.cep.trim() === '') {
+      throw new Error('CEP é obrigatório para consulta de viabilidade técnica. Forneça um CEP válido.');
+    }
+    if (!params?.numero || typeof params.numero !== 'string' || params.numero.trim() === '') {
+      throw new Error('Número do imóvel é obrigatório para consulta de viabilidade técnica.');
+    }
+
+    const resultadoViabilidade = await viabilidadeService.consultar(
       {
-        cep: params.cep || '13024-000',
-        numero: params.numero || '100',
-        bairro: params.bairro
+        cep: params.cep.trim(),
+        numero: params.numero.trim(),
+        bairro: params.bairro?.trim()
       },
       params.contatoId,
       {
@@ -25,6 +37,13 @@ const RAW_TOOL_IMPLEMENTATIONS: Record<string, (params: any, actor: ActorContext
         isMaia: true
       }
     );
+
+    return {
+      ...resultadoViabilidade,
+      status: 'MOCK',
+      modoOperacao: 'SIMULADO_DEMO',
+      aviso: 'MOCK/DEMO: Consulta de viabilidade simulada. Integração real com SGP/GIS não conectada.'
+    };
   },
 
   recomendar_plano: async (_params, actor) => {
@@ -84,15 +103,50 @@ const RAW_TOOL_IMPLEMENTATIONS: Record<string, (params: any, actor: ActorContext
     };
   },
 
-  aplicar_desconto_excecao: async (params, actor) => {
+  aplicar_desconto_excecao: async (params, _actor) => {
     if (!params || !params.dealId) {
       throw new Error('dealId é obrigatório para aplicar desconto de exceção.');
     }
     return {
       dealId: params.dealId,
       descontoPercentual: params.desconto || 15,
-      status: 'DESCONTO_APLICADO'
+      status: 'SIMULADO',
+      aviso: 'MOCK/SIMULAÇÃO: Desconto simulado gerado pelo motor de regras. Cobrança/faturamento real não implementada nesta etapa.'
     };
+  },
+
+  consultar_sgp_cliente: async (params, actor) => {
+    if (!params?.cpfCnpj && !params?.contratoId) {
+      throw new Error('Informe cpfCnpj ou contratoId para consultar o cliente no SGP.');
+    }
+    const { sgpService } = await import('../sgp/sgp.service.ts');
+    let contrato = null;
+    if (params.contratoId) {
+      contrato = await sgpService.getContractById(params.contratoId, actor.instanceId);
+    } else if (params.cpfCnpj) {
+      contrato = await sgpService.getContractByCpfCnpj(params.cpfCnpj, actor.instanceId);
+    }
+
+    if (!contrato) {
+      return {
+        encontrado: false,
+        mensagem: 'Nenhum contrato ativo localizado no SGP integrado.'
+      };
+    }
+
+    return {
+      encontrado: true,
+      contrato
+    };
+  },
+
+  desbloquear_em_confianca: async (params, actor) => {
+    if (!params?.contratoId) {
+      throw new Error('contratoId é obrigatório para realizar o desbloqueio em confiança no SGP.');
+    }
+    const { sgpService } = await import('../sgp/sgp.service.ts');
+    const resultado = await sgpService.desbloqueioConfianca(params.contratoId, actor);
+    return resultado;
   }
 };
 
@@ -138,7 +192,8 @@ export async function executeMaiaTool(options: ExecuteToolOptions): Promise<Maia
         userId: actor.userId,
         name: actor.name,
         role: actor.role
-      }
+      },
+      policyVersion: `v${policyCheck.nivel}`
     });
 
     await auditoriaService.logEvent({
@@ -146,11 +201,17 @@ export async function executeMaiaTool(options: ExecuteToolOptions): Promise<Maia
       actorId: actor.userId,
       actorName: actor.name,
       actorRole: actor.role,
-      action: 'MAIA_TOOL_PENDING_APPROVAL',
+      action: 'APPROVAL_REQUESTED',
       entityType: 'MAIA_APPROVAL',
       entityId: approvalReq.id,
       details: `Execução da ferramenta '${toolName}' suspensa. Criada solicitação de aprovação ${approvalReq.id} com status PENDING_APPROVAL.`,
-      dadosPosteriores: { approvalId: approvalReq.id, status: 'PENDING_APPROVAL', toolName, params },
+      dadosPosteriores: {
+        approvalId: approvalReq.id,
+        status: 'PENDING_APPROVAL',
+        toolName,
+        paramsHash: approvalReq.paramsHash,
+        requestedBy: approvalReq.requestedBy
+      },
       isMaiaAction: true
     });
 
@@ -178,53 +239,199 @@ export async function executeMaiaTool(options: ExecuteToolOptions): Promise<Maia
 }
 
 /**
- * P0: Execução controlada após aprovação humana por supervisor/operador
+ * P0: Aprovação de solicitação (PENDING_APPROVAL -> APPROVED)
  */
-export async function approveAndExecuteTool(
+export async function approveToolApproval(
   approvalId: string,
   reviewer: ActorContext
-): Promise<MaiaToolExecutionResult> {
+): Promise<MaiaApprovalRequest> {
   if (!reviewer || !reviewer.instanceId) {
     throw new Error('Contexto de revisor inválido.');
   }
 
-  // 1. Aprovar requisição
-  const req = await maiaApprovalsRepository.approve(approvalId, reviewer);
+  const approvedReq = await maiaApprovalsRepository.approve(approvalId, reviewer);
 
-  // 2. Marcar como executando
-  await maiaApprovalsRepository.setExecuting(approvalId, reviewer.instanceId);
-
-  // 3. Executar ferramenta internamente
-  const rawFn = RAW_TOOL_IMPLEMENTATIONS[req.toolName];
-  if (!rawFn) {
-    throw new Error(`Implementação da ferramenta '${req.toolName}' não encontrada.`);
-  }
-
-  const result = await rawFn(req.params, reviewer);
-
-  // 4. Marcar como executado
-  await maiaApprovalsRepository.setExecuted(approvalId, reviewer.instanceId, result);
-
-  // 5. Auditoria de aprovação e execução
   await auditoriaService.logEvent({
     instanceId: reviewer.instanceId,
     actorId: reviewer.userId,
     actorName: reviewer.name,
     actorRole: reviewer.role,
-    action: 'MAIA_TOOL_APPROVED_AND_EXECUTED',
+    action: 'APPROVAL_APPROVED',
     entityType: 'MAIA_APPROVAL',
     entityId: approvalId,
-    details: `Supervisor ${reviewer.name} aprovou e executou ferramenta '${req.toolName}'.`,
-    dadosPosteriores: { approvalId, status: 'EXECUTED', result },
+    details: `Supervisor ${reviewer.name} aprovou a solicitação de ferramenta '${approvedReq.toolName}'.`,
+    dadosPosteriores: {
+      approvalId,
+      toolName: approvedReq.toolName,
+      status: 'APPROVED',
+      approvedBy: approvedReq.resolvedBy,
+      requestedBy: approvedReq.requestedBy
+    },
+    isMaiaAction: false
+  });
+
+  return approvedReq;
+}
+
+/**
+ * P0: Rejeição de solicitação (PENDING_APPROVAL -> REJECTED)
+ */
+export async function rejectToolApproval(
+  approvalId: string,
+  reviewer: ActorContext,
+  reason: string
+): Promise<MaiaApprovalRequest> {
+  if (!reviewer || !reviewer.instanceId) {
+    throw new Error('Contexto de revisor inválido.');
+  }
+
+  const rejectedReq = await maiaApprovalsRepository.reject(approvalId, reviewer, reason);
+
+  await auditoriaService.logEvent({
+    instanceId: reviewer.instanceId,
+    actorId: reviewer.userId,
+    actorName: reviewer.name,
+    actorRole: reviewer.role,
+    action: 'APPROVAL_REJECTED',
+    entityType: 'MAIA_APPROVAL',
+    entityId: approvalId,
+    details: `Supervisor ${reviewer.name} rejeitou a solicitação '${rejectedReq.toolName}'. Motivo: ${reason}`,
+    dadosPosteriores: {
+      approvalId,
+      toolName: rejectedReq.toolName,
+      status: 'REJECTED',
+      rejectionReason: reason,
+      rejectedBy: rejectedReq.resolvedBy,
+      requestedBy: rejectedReq.requestedBy
+    },
+    isMaiaAction: false
+  });
+
+  return rejectedReq;
+}
+
+/**
+ * P0: Execução idempotente e atômica de ferramenta previamente aprovada (APPROVED -> EXECUTING -> EXECUTED / FAILED)
+ */
+export async function executeApprovedTool(
+  approvalId: string,
+  executor: ActorContext
+): Promise<MaiaToolExecutionResult> {
+  if (!executor || !executor.instanceId) {
+    throw new Error('Contexto de executor inválido.');
+  }
+
+  // 1. Recuperar solicitação da instância
+  const req = await maiaApprovalsRepository.getById(approvalId, executor.instanceId);
+  if (!req) {
+    throw new Error(`Solicitação de aprovação ${approvalId} não encontrada para a instância.`);
+  }
+
+  // 2. PARTE 9: Verificar hash dos parâmetros
+  const calculatedHash = calculateParamsHash(req.toolName, req.params);
+  if (req.paramsHash !== calculatedHash) {
+    throw new Error('PARAMS_HASH_MISMATCH: Os parâmetros foram alterados após a aprovação. Execução bloqueada.');
+  }
+
+  // 3. PARTE 7: Transição atômica APPROVED -> EXECUTING (apenas UMA requisição vence)
+  const executingReq = await maiaApprovalsRepository.setExecuting(approvalId, executor);
+
+  await auditoriaService.logEvent({
+    instanceId: executor.instanceId,
+    actorId: executor.userId,
+    actorName: executor.name,
+    actorRole: executor.role,
+    action: 'APPROVAL_EXECUTION_STARTED',
+    entityType: 'MAIA_APPROVAL',
+    entityId: approvalId,
+    details: `Iniciada execução da ferramenta aprovada '${executingReq.toolName}'.`,
+    dadosPosteriores: {
+      approvalId,
+      status: 'EXECUTING',
+      executedBy: executingReq.executedBy,
+      requestedBy: executingReq.requestedBy,
+      approvedBy: executingReq.resolvedBy
+    },
     isMaiaAction: true
   });
 
-  return {
-    status: 'EXECUTED',
-    toolName: req.toolName,
-    approvalId,
-    data: result
-  };
+  // 4. Executar ferramenta internamente
+  const rawFn = RAW_TOOL_IMPLEMENTATIONS[req.toolName];
+  if (!rawFn) {
+    await maiaApprovalsRepository.setFailed(approvalId, executor.instanceId, 'Implementação não encontrada');
+    throw new Error(`Implementação da ferramenta '${req.toolName}' não encontrada.`);
+  }
+
+  try {
+    const result = await rawFn(req.params, executor);
+
+    // 5. Marcar como executado com sucesso
+    await maiaApprovalsRepository.setExecuted(approvalId, executor.instanceId, result);
+
+    await auditoriaService.logEvent({
+      instanceId: executor.instanceId,
+      actorId: executor.userId,
+      actorName: executor.name,
+      actorRole: executor.role,
+      action: 'APPROVAL_EXECUTED',
+      entityType: 'MAIA_APPROVAL',
+      entityId: approvalId,
+      details: `Ferramenta '${req.toolName}' executada com sucesso após aprovação.`,
+      dadosPosteriores: {
+        approvalId,
+        status: 'EXECUTED',
+        result,
+        executedBy: { userId: executor.userId, name: executor.name, role: executor.role },
+        requestedBy: req.requestedBy,
+        approvedBy: req.resolvedBy
+      },
+      isMaiaAction: true
+    });
+
+    return {
+      status: 'EXECUTED',
+      toolName: req.toolName,
+      approvalId,
+      data: result
+    };
+  } catch (executionError: any) {
+    await maiaApprovalsRepository.setFailed(approvalId, executor.instanceId, executionError.message);
+
+    await auditoriaService.logEvent({
+      instanceId: executor.instanceId,
+      actorId: executor.userId,
+      actorName: executor.name,
+      actorRole: executor.role,
+      action: 'APPROVAL_EXECUTION_FAILED',
+      entityType: 'MAIA_APPROVAL',
+      entityId: approvalId,
+      details: `Falha na execução da ferramenta '${req.toolName}': ${executionError.message}`,
+      dadosPosteriores: {
+        approvalId,
+        status: 'FAILED',
+        error: executionError.message,
+        executedBy: { userId: executor.userId, name: executor.name, role: executor.role }
+      },
+      resultado: 'FALHA',
+      isMaiaAction: true
+    });
+
+    throw executionError;
+  }
+}
+
+/**
+ * Atalho de compatibilidade: Aprova e executa sequencialmente
+ */
+export async function approveAndExecuteTool(
+  approvalId: string,
+  reviewer: ActorContext
+): Promise<MaiaToolExecutionResult> {
+  const req = await maiaApprovalsRepository.getById(approvalId, reviewer.instanceId);
+  if (req && req.status === 'PENDING_APPROVAL') {
+    await approveToolApproval(approvalId, reviewer);
+  }
+  return executeApprovedTool(approvalId, reviewer);
 }
 
 const TOOL_METADATA: Record<string, { name: string; description: string; nivelMinimoAutonomia: number; requerAprovacaoHumana: boolean }> = {
@@ -251,6 +458,18 @@ const TOOL_METADATA: Record<string, { name: string; description: string; nivelMi
     description: 'Aplica desconto de exceção em negociação (requer aprovação humana obrigatória)',
     nivelMinimoAutonomia: 3,
     requerAprovacaoHumana: true
+  },
+  consultar_sgp_cliente: {
+    name: 'consultar_sgp_cliente',
+    description: 'Consulta status de conexão, IP PPPoE, ONT e faturas abertas no SGP integrado (IXC / MK-Auth / Voalle)',
+    nivelMinimoAutonomia: 1,
+    requerAprovacaoHumana: false
+  },
+  desbloquear_em_confianca: {
+    name: 'desbloquear_em_confianca',
+    description: 'Executa desbloqueio temporário de 48h em confiança para cliente bloqueado por inadimplência',
+    nivelMinimoAutonomia: 2,
+    requerAprovacaoHumana: false
   }
 };
 
@@ -275,6 +494,16 @@ export const MAIA_TOOL_REGISTRY: Record<string, MaiaToolDefinition> = {
     ...TOOL_METADATA.aplicar_desconto_excecao,
     execute: (params, actor) => executeMaiaTool({ toolName: 'aplicar_desconto_excecao', params, actor }),
     _rawExecute: RAW_TOOL_IMPLEMENTATIONS.aplicar_desconto_excecao
+  },
+  consultar_sgp_cliente: {
+    ...TOOL_METADATA.consultar_sgp_cliente,
+    execute: (params, actor) => executeMaiaTool({ toolName: 'consultar_sgp_cliente', params, actor }),
+    _rawExecute: RAW_TOOL_IMPLEMENTATIONS.consultar_sgp_cliente
+  },
+  desbloquear_em_confianca: {
+    ...TOOL_METADATA.desbloquear_em_confianca,
+    execute: (params, actor) => executeMaiaTool({ toolName: 'desbloquear_em_confianca', params, actor }),
+    _rawExecute: RAW_TOOL_IMPLEMENTATIONS.desbloquear_em_confianca
   }
 };
 

@@ -164,3 +164,33 @@ export interface OrdemServico {
   observacoes?: string;
 }
 
+export type SgpProvider = 'IXC' | 'MK_AUTH' | 'VOALLE';
+
+export interface SgpClienteStatus {
+  contratoId: string;
+  clienteId: string;
+  nomeCliente: string;
+  cpfCnpj: string;
+  planoContratado: string;
+  statusConexao: 'CONECTADO' | 'DESCONECTADO' | 'BLOQUEADO' | 'REDUZIDO';
+  ipPppoe?: string;
+  macOnt?: string;
+  sinalRxDbm?: number;
+  uptimeHoras?: number;
+  faturasAbertas: number;
+  diasInadimplente: number;
+  desbloqueioConfiancaDisponivel: boolean;
+  ultimoDesbloqueioConfianca?: string;
+  provedorSgp: SgpProvider;
+}
+
+export interface SgpDesbloqueioResult {
+  sucesso: boolean;
+  contratoId: string;
+  statusAnterior: string;
+  novoStatus: string;
+  protocolo: string;
+  expiraEm: string;
+  mensagem: string;
+}
+

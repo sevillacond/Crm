@@ -115,6 +115,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
           icon: Radio,
           badge: 'Adapter',
           badgeColor: 'bg-emerald-950 text-emerald-300 border-emerald-800'
+        },
+        {
+          id: 'sgp',
+          label: 'Gateway SGP & Fibra',
+          subLabel: 'IXC / MK-Auth / Voalle',
+          icon: Server,
+          badge: 'SGP',
+          badgeColor: 'bg-cyan-950 text-cyan-300 border-cyan-800'
         }
       ]
     },

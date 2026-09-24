@@ -3,7 +3,7 @@ version: '3.8'
 # ==============================================================================
 # ENLACE TELECOM CRM — DOCKER COMPOSE DE IMPLANTAÇÃO
 # Instância Isolada (Single-Tenant) por Provedor / CNPJ
-# P0 Hardening & PostgreSQL 16 Dedicado
+# P0 Hardening & PostgreSQL 16 Dedicado (Sem defaults inseguros em produção)
 # ==============================================================================
 
 services:
@@ -19,13 +19,18 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - INSTANCE_ID=${INSTANCE_ID:-inst-enlace-fibra-001}
-      - JWT_SECRET=${JWT_SECRET}
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-enlace_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-enlace_crm_db}?sslmode=disable
+      - INSTANCE_ID=${INSTANCE_ID:?INSTANCE_ID é obrigatório para inicializar a instância de produção}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET é obrigatório em produção}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-enlace_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD é obrigatório em produção}@postgres:5432/${POSTGRES_DB:-enlace_crm_db}?sslmode=disable
       - REDIS_URL=redis://redis:6379
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
-      - ADMIN_INITIAL_EMAIL=${ADMIN_INITIAL_EMAIL:-admin@enlace.net.br}
-      - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD}
+      - ADMIN_INITIAL_EMAIL=${ADMIN_INITIAL_EMAIL:?ADMIN_INITIAL_EMAIL é obrigatório em produção}
+      - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:?ADMIN_INITIAL_PASSWORD é obrigatório em produção}
+      - PROVIDER_CNPJ=${PROVIDER_CNPJ:?PROVIDER_CNPJ é obrigatório em produção}
+      - PROVIDER_RAZAO_SOCIAL=${PROVIDER_RAZAO_SOCIAL:?PROVIDER_RAZAO_SOCIAL é obrigatório em produção}
+      - PROVIDER_NOME_FANTASIA=${PROVIDER_NOME_FANTASIA:?PROVIDER_NOME_FANTASIA é obrigatório em produção}
+      - PROVIDER_CIDADE=${PROVIDER_CIDADE:?PROVIDER_CIDADE é obrigatório em produção}
+      - PROVIDER_UF=${PROVIDER_UF:?PROVIDER_UF é obrigatório em produção}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - WHATSAPP_API_TOKEN=${WHATSAPP_API_TOKEN}
       - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID}
@@ -54,7 +59,7 @@ services:
     restart: always
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-enlace_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD é obrigatório em produção}
       POSTGRES_DB: ${POSTGRES_DB:-enlace_crm_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data

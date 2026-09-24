@@ -1,27 +1,24 @@
 # ==============================================================================
 # ENLACE TELECOM CRM — DOCKERFILE MULTI-STAGE DE PRODUÇÃO
-# Single-Tenant Dedicated ISP Instance
+# Single-Tenant Dedicated ISP Instance (Build Determinístico com bun.lock)
 # ==============================================================================
 
 # Estágio 1: Build da Aplicação (Frontend Vite + Server TypeScript)
-FROM node:20-alpine AS builder
+FROM oven/bun:1-alpine AS builder
 
 WORKDIR /app
 
-# Instalar ferramentas de compilação essenciais
-RUN apk add --no-cache libc6-compat
-
 # Copiar manifestos de dependência
-COPY package.json package-lock.json* bun.lock* ./
+COPY package.json bun.lock ./
 
-# Instalar dependências completas para compilação
-RUN npm install --frozen-lockfile || npm install
+# Instalação estritamente determinística via lockfile congelado
+RUN bun install --frozen-lockfile
 
 # Copiar todo o código-fonte da aplicação
 COPY . .
 
 # Compilar o frontend estático React (Vite SPA -> /app/dist)
-RUN npm run build
+RUN bun run build
 
 # ==============================================================================
 # Estágio 2: Imagem Final de Execução (Minimalista & Segura)

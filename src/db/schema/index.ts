@@ -8,3 +8,4 @@ export * from './deals.ts';
 export * from './dealHistory.ts';
 export * from './ordensServico.ts';
 export * from './auditEvents.ts';
+export * from './maiaApprovals.ts';

@@ -23,6 +23,9 @@ import { PlanosCatalog } from './components/PlanosCatalog';
 import { OrdensServicoView } from './components/OrdensServicoView';
 import { ViabilidadeView } from './components/ViabilidadeView';
 import { AjudaView } from './components/AjudaView';
+import { MaiaCentralView } from './components/MaiaCentralView';
+import { SgpView } from './components/SgpView';
+import { WebPhoneView } from './components/WebPhoneView';
 import { 
   INITIAL_INSTANCE, 
   INITIAL_USERS, 
@@ -519,31 +522,26 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'sgp' && (
+          <SgpView currentUser={currentUser} />
+        )}
+
+        {activeTab === 'webphone' && (
+          <WebPhoneView
+            currentUser={currentUser}
+            contatos={contatos}
+          />
+        )}
+
         {activeTab === 'maia' && (
-          <div className="space-y-4">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center max-w-2xl mx-auto space-y-4">
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-purple-600 to-indigo-600 flex items-center justify-center text-white mx-auto shadow-lg shadow-purple-950">
-                <span className="text-2xl font-bold font-mono">M</span>
-              </div>
-              <h2 className="text-xl font-bold text-white">Central de Inteligência MaIA (v3.8 Flash)</h2>
-              <p className="text-xs text-slate-300 leading-relaxed max-w-lg mx-auto">
-                Módulo de Automação e Inteligência Artificial especializado em Provedores de Internet.
-                Operando através do <strong>MCP Tool Gateway</strong> com permissões estritas, auditoria imutável e guardrails de conformidade.
-              </p>
-              <div className="pt-2">
-                <button
-                  onClick={() => {
-                    setMaiaTargetDeal(null);
-                    setMaiaTargetContato(null);
-                    setIsMaiaOpen(true);
-                  }}
-                  className="px-6 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold shadow-lg shadow-indigo-950 cursor-pointer transition-all"
-                >
-                  Abrir Terminal Interativo MaIA
-                </button>
-              </div>
-            </div>
-          </div>
+          <MaiaCentralView
+            currentUser={currentUser}
+            onOpenTerminal={() => {
+              setMaiaTargetDeal(null);
+              setMaiaTargetContato(null);
+              setIsMaiaOpen(true);
+            }}
+          />
         )}
 
         {activeTab === 'auditoria' && (
