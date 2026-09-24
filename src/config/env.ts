@@ -83,6 +83,9 @@ export function validateEnv(overrideEnv?: Record<string, string | undefined>): A
     if (!instanceId || instanceId.trim() === '') {
       failFast('[FATAL] Em ambiente de PRODUÇÃO, INSTANCE_ID é obrigatório para definir o identificador isolado do provedor.');
     }
+    if (['inst-enlace-fibra-001', 'inst_enlace_sp_001', 'inst-dev-local-001'].includes(instanceId!.trim())) {
+      failFast('[FATAL] Em ambiente de PRODUÇÃO, o uso de IDs de instância padrão de demonstração é estritamente proibido.');
+    }
   }
 
   // 5. Admin Initial Email validation (P1: Eliminar identidade default em produção)
@@ -104,7 +107,7 @@ export function validateEnv(overrideEnv?: Record<string, string | undefined>): A
   const providerUf = envSource.PROVIDER_UF;
 
   if (isProduction) {
-    if (!providerCnpj || providerCnpj.trim() === '' || providerCnpj.trim() === '45.123.890/0001-92') {
+    if (!providerCnpj || providerCnpj.trim() === '' || providerCnpj.trim() === '45.123.890/0001-92' || providerCnpj.trim() === '14.892.341/0001-90') {
       failFast('[FATAL] Em ambiente de PRODUÇÃO, PROVIDER_CNPJ é obrigatório e não pode ser o CNPJ de demonstração.');
     }
     if (!providerRazaoSocial || providerRazaoSocial.trim() === '' || providerRazaoSocial.trim() === 'Enlace Telecomunicações e Fibra Óptica Ltda') {

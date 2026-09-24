@@ -29,12 +29,25 @@ export const CanaisIntegracoesView: React.FC = () => {
     { sender: 'maia', text: 'Olá! Seja bem-vindo à Enlace Telecom. Como a MaIA pode te ajudar hoje?' }
   ]);
 
+  const currentInstanceId = (() => {
+    try {
+      const stored = localStorage.getItem('enlace_user');
+      if (stored) {
+        const u = JSON.parse(stored);
+        if (u.instanceId) return u.instanceId;
+      }
+    } catch {
+      // fallback
+    }
+    return 'SEU_INSTANCE_ID';
+  })();
+
   const embedScript = `<!-- Enlace-CRM WebChat Nativo (PRD Seção 10) -->
 <script 
   src="https://cdn.enlacecrm.com.br/widget/v1/enlace-webchat.js"
-  data-instance-id="inst-enlace-fibra-001"
+  data-instance-id="${currentInstanceId}"
   data-primary-color="${widgetPrimaryColor}"
-  data-title="Atendimento Enlace Telecom"
+  data-title="Atendimento ao Cliente"
   data-avatar="maia"
   async>
 </script>`;

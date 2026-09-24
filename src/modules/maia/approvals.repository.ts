@@ -41,6 +41,7 @@ export interface MaiaApprovalRequest {
   };
   executionResult?: any;
   executedAt?: string;
+  expiresAt?: string;
   requestId?: string;
   correlationId?: string;
 }
@@ -93,6 +94,7 @@ class ApprovalsRepository {
       role: string;
     };
     policyVersion?: string;
+    expiresAt?: Date | string;
     requestId?: string;
     correlationId?: string;
   }): Promise<MaiaApprovalRequest> {
@@ -104,6 +106,9 @@ class ApprovalsRepository {
     const paramsHash = calculateParamsHash(data.toolName, data.params);
     const policyVersion = data.policyVersion || 'v1';
     const createdAt = new Date();
+    const expiresAt = data.expiresAt 
+      ? (data.expiresAt instanceof Date ? data.expiresAt : new Date(data.expiresAt))
+      : new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h default
 
     if (isDbConnected()) {
       try {
@@ -119,6 +124,7 @@ class ApprovalsRepository {
           requestedByRole: data.requestedBy.role,
           status: 'PENDING_APPROVAL',
           createdAt,
+          expiresAt,
           requestId: data.requestId || null,
           correlationId: data.correlationId || null
         });
@@ -133,6 +139,7 @@ class ApprovalsRepository {
           requestedBy: data.requestedBy,
           status: 'PENDING_APPROVAL',
           createdAt: createdAt.toISOString(),
+          expiresAt: expiresAt.toISOString(),
           requestId: data.requestId,
           correlationId: data.correlationId
         };
@@ -158,6 +165,7 @@ class ApprovalsRepository {
       requestedBy: data.requestedBy,
       status: 'PENDING_APPROVAL',
       createdAt: createdAt.toISOString(),
+      expiresAt: expiresAt.toISOString(),
       requestId: data.requestId,
       correlationId: data.correlationId
     };
@@ -241,6 +249,17 @@ class ApprovalsRepository {
       throw new Error('Contexto de revisor ou instanceId inválido.');
     }
 
+    const existing = await this.getById(id, reviewer.instanceId);
+    if (!existing) {
+      throw new Error(`Solicitação de aprovação ${id} não encontrada para a instância ${reviewer.instanceId}`);
+    }
+    if (existing.status !== 'PENDING_APPROVAL') {
+      throw new Error(`Solicitação não pode ser aprovada no status atual (${existing.status})`);
+    }
+    if (existing.expiresAt && new Date(existing.expiresAt).getTime() < Date.now()) {
+      throw new Error(`Solicitação de aprovação ${id} expirou e não pode ser aprovada.`);
+    }
+
     if (isDbConnected()) {
       try {
         const resolvedAt = new Date();
@@ -266,7 +285,7 @@ class ApprovalsRepository {
 
         return this.mapToDomain(updated[0]);
       } catch (err: any) {
-        if (err.message.includes('não encontrada') || err.message.includes('já resolvida')) {
+        if (err.message.includes('não encontrada') || err.message.includes('já resolvida') || err.message.includes('expirou')) {
           throw err;
         }
         if (env.NODE_ENV === 'production') {
@@ -288,6 +307,9 @@ class ApprovalsRepository {
       if (req.status !== 'PENDING_APPROVAL') {
         throw new Error(`Solicitação não pode ser aprovada no status atual (${req.status})`);
       }
+      if (req.expiresAt && new Date(req.expiresAt).getTime() < Date.now()) {
+        throw new Error(`Solicitação de aprovação ${id} expirou e não pode ser aprovada.`);
+      }
 
       req.status = 'APPROVED';
       req.resolvedAt = new Date().toISOString();
@@ -304,6 +326,14 @@ class ApprovalsRepository {
   async reject(id: string, reviewer: ActorContext, reason: string): Promise<MaiaApprovalRequest> {
     if (!reviewer || !reviewer.instanceId) {
       throw new Error('Contexto de revisor ou instanceId inválido.');
+    }
+
+    const existing = await this.getById(id, reviewer.instanceId);
+    if (!existing) {
+      throw new Error(`Solicitação de aprovação ${id} não encontrada para a instância ${reviewer.instanceId}`);
+    }
+    if (existing.status !== 'PENDING_APPROVAL') {
+      throw new Error(`Solicitação não pode ser rejeitada no status atual (${existing.status})`);
     }
 
     if (isDbConnected()) {
@@ -332,7 +362,7 @@ class ApprovalsRepository {
 
         return this.mapToDomain(updated[0]);
       } catch (err: any) {
-        if (err.message.includes('não encontrada') || err.message.includes('já resolvida')) {
+        if (err.message.includes('não encontrada') || err.message.includes('já resolvida') || err.message.includes('não pode ser rejeitada')) {
           throw err;
         }
         if (env.NODE_ENV === 'production') {
@@ -373,12 +403,22 @@ class ApprovalsRepository {
       throw new Error('Contexto de executor inválido.');
     }
 
-    // 1. Verificar integridade dos parâmetros contra paramsHash
+    // 1. Verificar existência e status da solicitação
     const currentReq = await this.getById(id, executor.instanceId);
     if (!currentReq) {
       throw new Error(`Solicitação de aprovação ${id} não encontrada para a instância ${executor.instanceId}`);
     }
 
+    if (currentReq.status !== 'APPROVED') {
+      throw new Error(`Solicitação não pode ser executada: deve estar APPROVED (status atual: ${currentReq.status})`);
+    }
+
+    // 2. Verificar expiração
+    if (currentReq.expiresAt && new Date(currentReq.expiresAt).getTime() < Date.now()) {
+      throw new Error(`Solicitação de aprovação ${id} expirou e não pode ser executada.`);
+    }
+
+    // 3. Verificar integridade dos parâmetros contra paramsHash
     const calculatedHash = calculateParamsHash(currentReq.toolName, currentReq.params);
     if (currentReq.paramsHash !== calculatedHash) {
       throw new Error('PARAMS_HASH_MISMATCH: Os parâmetros da ferramenta foram adulterados após a solicitação.');
@@ -407,7 +447,7 @@ class ApprovalsRepository {
 
         return this.mapToDomain(updated[0]);
       } catch (err: any) {
-        if (err.message.includes('deve estar APPROVED') || err.message.includes('PARAMS_HASH_MISMATCH')) {
+        if (err.message.includes('deve estar APPROVED') || err.message.includes('PARAMS_HASH_MISMATCH') || err.message.includes('expirou')) {
           throw err;
         }
         if (env.NODE_ENV === 'production') {
@@ -429,6 +469,9 @@ class ApprovalsRepository {
       if (req.status !== 'APPROVED') {
         throw new Error(`Solicitação não pode ser executada: deve estar APPROVED (status atual: ${req.status})`);
       }
+      if (req.expiresAt && new Date(req.expiresAt).getTime() < Date.now()) {
+        throw new Error(`Solicitação de aprovação ${id} expirou e não pode ser executada.`);
+      }
 
       req.status = 'EXECUTING';
       req.executedBy = {
@@ -442,10 +485,14 @@ class ApprovalsRepository {
   }
 
   async setExecuted(id: string, instanceId: string, result: any): Promise<void> {
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é obrigatório para concluir execução de aprovação.');
+    }
+
     const executedAt = new Date();
     if (isDbConnected()) {
       try {
-        await db
+        const updated = await db
           .update(maiaApprovalRequestsTable)
           .set({
             status: 'EXECUTED',
@@ -456,9 +503,17 @@ class ApprovalsRepository {
             eq(maiaApprovalRequestsTable.id, id),
             eq(maiaApprovalRequestsTable.instanceId, instanceId),
             eq(maiaApprovalRequestsTable.status, 'EXECUTING')
-          ));
+          ))
+          .returning();
+
+        if (updated.length === 0) {
+          throw new Error(`Solicitação ${id} não pode ser concluída: deve estar em status EXECUTING e pertencer à instância.`);
+        }
         return;
       } catch (err: any) {
+        if (err.message.includes('não pode ser concluída')) {
+          throw err;
+        }
         if (env.NODE_ENV === 'production') {
           throw new Error(`Falha ao registrar conclusão de execução no Postgres: ${err.message}`);
         }
@@ -472,19 +527,27 @@ class ApprovalsRepository {
 
     return this.withLock(id, async () => {
       const req = this.fallbackRequests.get(id);
-      if (req && req.instanceId === instanceId) {
-        req.status = 'EXECUTED';
-        req.executionResult = result;
-        req.executedAt = executedAt.toISOString();
+      if (!req || req.instanceId !== instanceId) {
+        throw new Error(`Solicitação ${id} não encontrada para a instância ${instanceId}.`);
       }
+      if (req.status !== 'EXECUTING') {
+        throw new Error(`Solicitação ${id} não pode ser concluída: deve estar em status EXECUTING (status atual: ${req.status}).`);
+      }
+      req.status = 'EXECUTED';
+      req.executionResult = result;
+      req.executedAt = executedAt.toISOString();
     });
   }
 
   async setFailed(id: string, instanceId: string, errorResult: any): Promise<void> {
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é obrigatório para registrar falha na aprovação.');
+    }
+
     const executedAt = new Date();
     if (isDbConnected()) {
       try {
-        await db
+        const updated = await db
           .update(maiaApprovalRequestsTable)
           .set({
             status: 'FAILED',
@@ -495,9 +558,17 @@ class ApprovalsRepository {
             eq(maiaApprovalRequestsTable.id, id),
             eq(maiaApprovalRequestsTable.instanceId, instanceId),
             eq(maiaApprovalRequestsTable.status, 'EXECUTING')
-          ));
+          ))
+          .returning();
+
+        if (updated.length === 0) {
+          throw new Error(`Solicitação ${id} não pode ser marcada como FAILED: deve estar em status EXECUTING e pertencer à instância.`);
+        }
         return;
       } catch (err: any) {
+        if (err.message.includes('não pode ser marcada como FAILED')) {
+          throw err;
+        }
         if (env.NODE_ENV === 'production') {
           throw new Error(`Falha ao registrar falha de execução no Postgres: ${err.message}`);
         }
@@ -511,11 +582,15 @@ class ApprovalsRepository {
 
     return this.withLock(id, async () => {
       const req = this.fallbackRequests.get(id);
-      if (req && req.instanceId === instanceId) {
-        req.status = 'FAILED';
-        req.executionResult = errorResult;
-        req.executedAt = executedAt.toISOString();
+      if (!req || req.instanceId !== instanceId) {
+        throw new Error(`Solicitação ${id} não encontrada para a instância ${instanceId}.`);
       }
+      if (req.status !== 'EXECUTING') {
+        throw new Error(`Solicitação ${id} não pode ser marcada como FAILED: deve estar em status EXECUTING (status atual: ${req.status}).`);
+      }
+      req.status = 'FAILED';
+      req.executionResult = errorResult;
+      req.executedAt = executedAt.toISOString();
     });
   }
 
@@ -552,6 +627,7 @@ class ApprovalsRepository {
         : undefined,
       executionResult: row.executionResult || undefined,
       executedAt: row.executedAt ? row.executedAt.toISOString() : undefined,
+      expiresAt: row.expiresAt ? row.expiresAt.toISOString() : undefined,
       requestId: row.requestId || undefined,
       correlationId: row.correlationId || undefined
     };

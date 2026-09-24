@@ -11,13 +11,18 @@ class OrdensRepository {
     instanceId: 'inst-enlace-fibra-001'
   }));
 
-  async getAll(instanceId?: string): Promise<OrdemServico[]> {
+  async getAll(instanceId: string): Promise<OrdemServico[]> {
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é obrigatório para consultar ordens de serviço.');
+    }
+
     if (isDbConnected()) {
       try {
-        const query = db.select().from(ordensServicoTable);
-        const rows = instanceId
-          ? await query.where(eq(ordensServicoTable.instanceId, instanceId)).orderBy(desc(ordensServicoTable.createdAt))
-          : await query.orderBy(desc(ordensServicoTable.createdAt));
+        const rows = await db
+          .select()
+          .from(ordensServicoTable)
+          .where(eq(ordensServicoTable.instanceId, instanceId))
+          .orderBy(desc(ordensServicoTable.createdAt));
 
         return rows.map(r => this.mapToDomain(r));
       } catch (err: any) {
@@ -32,21 +37,20 @@ class OrdensRepository {
       throw new Error('Banco de dados PostgreSQL indisponível. Operação interrompida em produção.');
     }
 
-    return this.fallbackOrdens.filter(o => !instanceId || o.instanceId === instanceId);
+    return this.fallbackOrdens.filter(o => o.instanceId === instanceId);
   }
 
-  async getById(id: string, instanceId?: string): Promise<OrdemServico | null> {
+  async getById(id: string, instanceId: string): Promise<OrdemServico | null> {
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é obrigatório para consultar ordem de serviço.');
+    }
+
     if (isDbConnected()) {
       try {
-        const conditions = [eq(ordensServicoTable.id, id)];
-        if (instanceId) {
-          conditions.push(eq(ordensServicoTable.instanceId, instanceId));
-        }
-
         const rows = await db
           .select()
           .from(ordensServicoTable)
-          .where(and(...conditions))
+          .where(and(eq(ordensServicoTable.id, id), eq(ordensServicoTable.instanceId, instanceId)))
           .limit(1);
 
         if (rows.length > 0) {
@@ -65,13 +69,13 @@ class OrdensRepository {
       throw new Error('Banco de dados PostgreSQL indisponível. Operação interrompida em produção.');
     }
 
-    return this.fallbackOrdens.find(o => o.id === id && (!instanceId || o.instanceId === instanceId)) || null;
+    return this.fallbackOrdens.find(o => o.id === id && o.instanceId === instanceId) || null;
   }
 
   async create(os: OrdemServico, instanceId?: string): Promise<OrdemServico> {
-    const finalInstanceId = instanceId || (os as any).instanceId || (env.NODE_ENV !== 'production' ? (env.INSTANCE_ID || 'inst-dev-local-001') : '');
-    if (!finalInstanceId) {
-      throw new Error('instanceId é obrigatório para cadastrar Ordem de Serviço em produção.');
+    const finalInstanceId = instanceId || (os as any).instanceId;
+    if (!finalInstanceId || finalInstanceId.trim() === '') {
+      throw new Error('instanceId é obrigatório para cadastrar Ordem de Serviço.');
     }
 
     if (isDbConnected()) {
@@ -120,13 +124,17 @@ class OrdensRepository {
     return os;
   }
 
-  async updateStatus(id: string, status: OSStatus, instanceId?: string): Promise<OrdemServico | null> {
+  async updateStatus(id: string, status: OSStatus, instanceId: string): Promise<OrdemServico | null> {
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é obrigatório para atualizar status da ordem de serviço.');
+    }
+
     if (isDbConnected()) {
       try {
-        const conditions = [eq(ordensServicoTable.id, id)];
-        if (instanceId) {
-          conditions.push(eq(ordensServicoTable.instanceId, instanceId));
-        }
+        const conditions = [
+          eq(ordensServicoTable.id, id),
+          eq(ordensServicoTable.instanceId, instanceId)
+        ];
 
         await db
           .update(ordensServicoTable)
@@ -146,7 +154,7 @@ class OrdensRepository {
       throw new Error('Banco de dados PostgreSQL indisponível. Operação interrompida em produção.');
     }
 
-    const idx = this.fallbackOrdens.findIndex(o => o.id === id && (!instanceId || o.instanceId === instanceId));
+    const idx = this.fallbackOrdens.findIndex(o => o.id === id && o.instanceId === instanceId);
     if (idx !== -1) {
       this.fallbackOrdens[idx].status = status;
       return this.fallbackOrdens[idx];

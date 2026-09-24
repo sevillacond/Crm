@@ -148,9 +148,11 @@ class UsersRepository {
   }
 
   async create(user: User, rawPassword?: string, instanceId?: string): Promise<User> {
-    const finalInstanceId = instanceId || user.instanceId || env.INSTANCE_ID;
-    if (!finalInstanceId && env.NODE_ENV === 'production') {
-      throw new Error('instanceId é obrigatório para cadastrar usuário em produção.');
+    const finalInstanceId = instanceId || user.instanceId;
+    if (!finalInstanceId || finalInstanceId.trim() === '') {
+      if (env.NODE_ENV === 'production') {
+        throw new Error('instanceId é obrigatório para cadastrar usuário em produção.');
+      }
     }
     const resolvedInstanceId = finalInstanceId || 'inst-dev-local-001';
 

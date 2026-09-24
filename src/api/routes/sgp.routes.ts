@@ -4,6 +4,17 @@ import { authMiddleware } from '../middlewares/auth.middleware.ts';
 
 const router = Router();
 
+// Status da integração SGP (REAL / MOCK / NOT_CONFIGURED)
+router.get('/status', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const actor = req.actor!;
+    const status = sgpService.getIntegrationStatus(actor.instanceId);
+    return res.json({ status });
+  } catch (err: any) {
+    return res.status(400).json({ error: { message: err.message } });
+  }
+});
+
 // Listar todos os contratos SGP da instância
 router.get('/contratos', authMiddleware, async (req: Request, res: Response) => {
   try {

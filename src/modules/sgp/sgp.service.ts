@@ -1,6 +1,7 @@
 import { SgpClienteStatus, SgpDesbloqueioResult, SgpProvider } from '../../types';
 import { ActorContext } from '../auth/actorContext.ts';
 import { auditoriaService } from '../auditoria/auditoria.service.ts';
+import { sgpAdapter } from '../../integrations/sgp/sgp.adapter.ts';
 
 export interface SgpContractMock {
   contratoId: string;
@@ -18,6 +19,8 @@ export interface SgpContractMock {
   desbloqueioConfiancaDisponivel: boolean;
   ultimoDesbloqueioConfianca?: string;
   provedorSgp: SgpProvider;
+  origem: 'REAL' | 'ADAPTER' | 'MOCK' | 'NOT_CONFIGURED';
+  isMock?: boolean;
 }
 
 class SgpService {
@@ -44,7 +47,9 @@ class SgpService {
         faturasAbertas: 0,
         diasInadimplente: 0,
         desbloqueioConfiancaDisponivel: false,
-        provedorSgp: 'IXC'
+        provedorSgp: 'IXC',
+        origem: 'MOCK',
+        isMock: true
       },
       {
         contratoId: 'CTR-MK-4412',
@@ -60,7 +65,9 @@ class SgpService {
         faturasAbertas: 1,
         diasInadimplente: 12,
         desbloqueioConfiancaDisponivel: true,
-        provedorSgp: 'MK_AUTH'
+        provedorSgp: 'MK_AUTH',
+        origem: 'MOCK',
+        isMock: true
       },
       {
         contratoId: 'CTR-VOA-1092',
@@ -76,7 +83,9 @@ class SgpService {
         faturasAbertas: 0,
         diasInadimplente: 0,
         desbloqueioConfiancaDisponivel: false,
-        provedorSgp: 'VOALLE'
+        provedorSgp: 'VOALLE',
+        origem: 'MOCK',
+        isMock: true
       },
       {
         contratoId: 'CTR-IXC-9930',
@@ -92,46 +101,71 @@ class SgpService {
         faturasAbertas: 1,
         diasInadimplente: 7,
         desbloqueioConfiancaDisponivel: true,
-        provedorSgp: 'IXC'
+        provedorSgp: 'IXC',
+        origem: 'MOCK',
+        isMock: true
       }
     ];
 
     this.contractsByInstance.set('inst-dev-local-001', devContracts);
-    this.contractsByInstance.set('inst-enlace-fibra-001', devContracts);
+  }
+
+  public getIntegrationStatus(instanceId: string): {
+    status: 'REAL' | 'ADAPTER' | 'MOCK' | 'NOT_CONFIGURED';
+    provedor: SgpProvider;
+    modo: string;
+    mensagem: string;
+  } {
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é obrigatório para verificar status do SGP.');
+    }
+
+    if (sgpAdapter.isConfigurado()) {
+      return {
+        status: 'REAL',
+        provedor: 'IXC',
+        modo: 'PRODUÇÃO',
+        mensagem: 'Integração SGP operacional via API REST.'
+      };
+    }
+
+    if (this.contractsByInstance.has(instanceId)) {
+      return {
+        status: 'MOCK',
+        provedor: 'IXC',
+        modo: 'DEMO/SANDBOX',
+        mensagem: 'Modo demonstração/mock ativo com contratos fictícios isolados.'
+      };
+    }
+
+    return {
+      status: 'NOT_CONFIGURED',
+      provedor: 'IXC',
+      modo: 'NÃO CONFIGURADO',
+      mensagem: 'Nenhuma integração SGP configurada para esta instância. Nenhum dado fictício gerado.'
+    };
   }
 
   public async getContracts(instanceId: string): Promise<SgpContractMock[]> {
-    if (!instanceId) return [];
-    if (!this.contractsByInstance.has(instanceId)) {
-      // Clona lista base inicial para nova instância
-      this.contractsByInstance.set(instanceId, [
-        {
-          contratoId: `CTR-${instanceId.slice(0, 4)}-01`,
-          clienteId: 'CLI-LOCAL-01',
-          nomeCliente: 'Cliente Exemplo Provedor',
-          cpfCnpj: '000.111.222-33',
-          planoContratado: 'Fibra 500 Mega',
-          statusConexao: 'CONECTADO',
-          ipPppoe: '100.64.1.10',
-          macOnt: '50:C7:BF:00:11:22',
-          sinalRxDbm: -19.8,
-          uptimeHoras: 24,
-          faturasAbertas: 0,
-          diasInadimplente: 0,
-          desbloqueioConfiancaDisponivel: false,
-          provedorSgp: 'IXC'
-        }
-      ]);
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é obrigatório para consultar contratos no SGP.');
     }
+    // P0: Nunca fabricar clientes ou contratos fictícios para instâncias sem dados
     return this.contractsByInstance.get(instanceId) || [];
   }
 
   public async getContractById(contratoId: string, instanceId: string): Promise<SgpContractMock | null> {
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é obrigatório para consultar contrato no SGP.');
+    }
     const list = await this.getContracts(instanceId);
     return list.find(c => c.contratoId === contratoId) || null;
   }
 
   public async getContractByCpfCnpj(cpfCnpj: string, instanceId: string): Promise<SgpContractMock | null> {
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é obrigatório para consultar contrato por CPF/CNPJ no SGP.');
+    }
     const normalized = cpfCnpj.replace(/\D/g, '');
     const list = await this.getContracts(instanceId);
     return list.find(c => c.cpfCnpj.replace(/\D/g, '') === normalized) || null;

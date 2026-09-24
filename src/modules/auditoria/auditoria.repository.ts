@@ -56,19 +56,19 @@ class AuditoriaRepository {
     }
   }
 
-  async list(instanceId?: string, limit: number = 100): Promise<AuditLog[]> {
-    if (!instanceId && env.NODE_ENV === 'production') {
-      throw new Error('instanceId é estritamente obrigatório para consultar auditoria em produção.');
+  async list(instanceId: string, limit: number = 100): Promise<AuditLog[]> {
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é estritamente obrigatório para consultar auditoria.');
     }
 
     if (isDbConnected()) {
       try {
-        const query = db.select().from(auditEventsTable);
-        const condition = instanceId ? eq(auditEventsTable.instanceId, instanceId) : undefined;
-
-        const rows = condition
-          ? await query.where(condition).orderBy(desc(auditEventsTable.timestamp), desc(auditEventsTable.id)).limit(limit)
-          : await query.orderBy(desc(auditEventsTable.timestamp), desc(auditEventsTable.id)).limit(limit);
+        const rows = await db
+          .select()
+          .from(auditEventsTable)
+          .where(eq(auditEventsTable.instanceId, instanceId))
+          .orderBy(desc(auditEventsTable.timestamp), desc(auditEventsTable.id))
+          .limit(limit);
 
         return rows.map(r => this.mapToDomain(r));
       } catch (err: any) {
@@ -83,19 +83,16 @@ class AuditoriaRepository {
       throw new Error('PostgreSQL indisponível para consulta de auditoria em produção.');
     }
 
-    const filtered = instanceId
-      ? this.fallbackEvents.filter(e => e.instanceId === instanceId)
-      : this.fallbackEvents;
-
+    const filtered = this.fallbackEvents.filter(e => e.instanceId === instanceId);
     return [...filtered].slice(0, limit);
   }
 
   async save(input: AuditEventInput): Promise<AuditLog & { hashIntegridade: string; previousHash: string }> {
-    const instanceId = input.instanceId || env.INSTANCE_ID;
-    if (!instanceId && env.NODE_ENV === 'production') {
-      throw new Error('Falha de auditoria: instanceId é estritamente obrigatório para registrar eventos de auditoria em produção.');
+    const instanceId = input.instanceId;
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('Falha de auditoria: instanceId é estritamente obrigatório para registrar eventos de auditoria.');
     }
-    const finalInstanceId = instanceId || 'inst-dev-local-001';
+    const finalInstanceId = instanceId;
 
     const id = `aud_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     const timestamp = new Date();

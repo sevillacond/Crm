@@ -71,8 +71,15 @@ const RAW_TOOL_IMPLEMENTATIONS: Record<string, (params: any, actor: ActorContext
       throw new Error(`Contato ${params.contatoId} não encontrado na instância ${actor.instanceId}. Operação bloqueada.`);
     }
 
-    const score = 92;
-    const resumo = 'Lead com alta propensão de fechamento e interesse imediato em portabilidade.';
+    // Calcular score com base na integridade e completude cadastral real do contato
+    let calculatedScore = 50;
+    if (contato.cpfCnpj && contato.cpfCnpj.trim() !== '') calculatedScore += 15;
+    if (contato.email && contato.email.trim() !== '') calculatedScore += 15;
+    if (contato.telefone && contato.telefone.trim() !== '') calculatedScore += 10;
+    if (contato.cep && contato.numero) calculatedScore += 10;
+    const score = Math.min(100, calculatedScore);
+    const temperatura = score >= 80 ? 'QUENTE' : (score >= 60 ? 'MORNO' : 'FRIO');
+    const resumo = `[MOCK/DEMO - Regra de Completude Cadastral] Lead classificado como ${temperatura} (${score}/100) com base nos dados verificados.`;
 
     // 2. Executar atualização de score e resumo sob o escopo isolado da instância
     await contatosRepository.update(params.contatoId, {
@@ -98,7 +105,7 @@ const RAW_TOOL_IMPLEMENTATIONS: Record<string, (params: any, actor: ActorContext
     return {
       contatoId: params.contatoId,
       score,
-      temperatura: 'QUENTE',
+      temperatura,
       resumo
     };
   },

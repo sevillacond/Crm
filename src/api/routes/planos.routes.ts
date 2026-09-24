@@ -12,7 +12,7 @@ router.get(
   requirePermission('planos:read'),
   async (req: Request, res: Response, next) => {
     try {
-      const planos = await planosService.getAll(req.instanceId);
+      const planos = await planosService.getAll(req.instanceId!);
       res.json(planos);
     } catch (err) {
       next(err);
@@ -27,7 +27,7 @@ router.get(
   requirePermission('planos:read'),
   async (req: Request, res: Response, next) => {
     try {
-      const plano = await planosService.getById(req.params.id, req.instanceId);
+      const plano = await planosService.getById(req.params.id, req.instanceId!);
       if (!plano) {
         res.status(404).json({ error: { code: 'PLANO_NOT_FOUND', message: 'Plano não encontrado' } });
         return;

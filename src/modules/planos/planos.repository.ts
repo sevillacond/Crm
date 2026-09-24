@@ -11,18 +11,17 @@ class PlanosRepository {
     instanceId: 'inst-enlace-fibra-001'
   }));
 
-  async getAll(instanceId?: string): Promise<Plano[]> {
+  async getAll(instanceId: string): Promise<Plano[]> {
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é obrigatório para consultar planos.');
+    }
+
     if (isDbConnected()) {
       try {
-        const conditions = [eq(planosTable.ativo, true)];
-        if (instanceId) {
-          conditions.push(eq(planosTable.instanceId, instanceId));
-        }
-
         const rows = await db
           .select()
           .from(planosTable)
-          .where(and(...conditions));
+          .where(and(eq(planosTable.ativo, true), eq(planosTable.instanceId, instanceId)));
 
         return rows.map(r => this.mapToDomain(r));
       } catch (err: any) {
@@ -37,21 +36,20 @@ class PlanosRepository {
       throw new Error('Banco de dados PostgreSQL indisponível. Operação interrompida em produção.');
     }
 
-    return this.fallbackPlanos.filter(p => !instanceId || p.instanceId === instanceId);
+    return this.fallbackPlanos.filter(p => p.instanceId === instanceId);
   }
 
-  async getById(id: string, instanceId?: string): Promise<Plano | null> {
+  async getById(id: string, instanceId: string): Promise<Plano | null> {
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é obrigatório para consultar plano.');
+    }
+
     if (isDbConnected()) {
       try {
-        const conditions = [eq(planosTable.id, id)];
-        if (instanceId) {
-          conditions.push(eq(planosTable.instanceId, instanceId));
-        }
-
         const rows = await db
           .select()
           .from(planosTable)
-          .where(and(...conditions))
+          .where(and(eq(planosTable.id, id), eq(planosTable.instanceId, instanceId)))
           .limit(1);
 
         if (rows.length > 0) {
@@ -70,7 +68,7 @@ class PlanosRepository {
       throw new Error('Banco de dados PostgreSQL indisponível. Operação interrompida em produção.');
     }
 
-    return this.fallbackPlanos.find(p => p.id === id && (!instanceId || p.instanceId === instanceId)) || null;
+    return this.fallbackPlanos.find(p => p.id === id && p.instanceId === instanceId) || null;
   }
 
   private mapToDomain(row: PlanoDb): Plano {

@@ -79,7 +79,6 @@ class TelefoniaService {
     ];
 
     this.chamadasByInstance.set('inst-dev-local-001', devChamadas);
-    this.chamadasByInstance.set('inst-enlace-fibra-001', devChamadas);
   }
 
   public async getChamadas(instanceId: string): Promise<ChamadaRecord[]> {

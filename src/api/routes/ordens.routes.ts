@@ -12,7 +12,7 @@ router.get(
   requirePermission('ordens:read'),
   async (req: Request, res: Response, next) => {
     try {
-      const ordens = await ordensService.listAll(req.instanceId);
+      const ordens = await ordensService.listAll(req.instanceId!);
       res.json(ordens);
     } catch (err) {
       next(err);

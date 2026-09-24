@@ -50,12 +50,32 @@ Diferente de CRMs genéricos, o Enlace CRM integra nativamente:
 
 ---
 
-## 3. Arquitetura Técnica & Isolamento (Single-Tenant)
+## 3. Estado Real da Arquitetura & Governança (Auditoria P0.5)
 
-Cada provedor atendido possui uma **instância totalmente isolada**:
-- **Sem vazamento de dados (Cross-Tenant)**: Cada cliente opera com banco de dados PostgreSQL próprio;
-- **Conformidade com a LGPD**: Dados de tráfego, CPF/CNPJ e histórico de conversas sob soberania do provedor;
-- **Segurança de Acesso RBAC**: Perfis de Administrador, Supervisor, Atendente Comercial e Técnico de Campo.
+O Enlace CRM segue separação arquitetural estrita entre **módulos reais de produção**, **gateways de integração (adapters)** e **dados de demonstração/sandbox (mocks)**:
+
+### 3.1 O que é REAL (Implementação de Produção)
+- **Autoridade Única PostgreSQL 16 + Drizzle**: PostgreSQL é a autoridade máxima de persistência. O cache em memória/Redis atua exclusivamente como otimização transitória (Fail-Closed na ausência do banco).
+- **Máquina de Estados de Aprovações MaIA**: Transições atômicas estritas (`PENDING_APPROVAL` -> `APPROVED`/`REJECTED` -> `EXECUTING` -> `EXECUTED`/`FAILED`). Verificação de concorrência com validação de `rowsAffected === 1`.
+- **Integridade Criptográfica (paramsHash)**: Hash SHA-256 canônico gerado na solicitação e revalidado na execução. Alterações nos parâmetros bloqueiam a execução imediatamente com `PARAMS_HASH_MISMATCH`.
+- **Governança & Três Identidades**: Preservação auditada de `requestedBy`, `resolvedBy` e `executedBy`. Nunca substitui identidade humana por identificadores genéricos.
+- **Expiração de Aprovações**: Campo `expiresAt` com bloqueio automático de aprovação e execução de solicitações expiradas.
+- **Policy Engine de Autonomia**: Níveis N0 (desativada) a N4 (autônoma). Persistência de `setNivel` gravada primeiro no PostgreSQL antes de invalidar/atualizar cache.
+- **Isolamento Absoluto por `instanceId`**: Todos os repositórios sensíveis (`contatos`, `deals`, `planos`, `ordensServico`, `auditoria`, `sessions`, `maiaApprovals`, `sgp`) exigem `instanceId` obrigatório, injetado exclusivamente pelo `ActorContext` do token JWT verificado.
+- **Integridade Relacional Cross-Instance**: Bloqueio transacional de entidades de instâncias distintas (ex: Deal na instância A tentando referenciar Contato ou Plano da instância B é rejeitado com 403).
+- **Trilha de Auditoria Encadeada**: Encadeamento linear de hash SHA-256 (`previousHash` -> `hashIntegridade`) com PostgreSQL advisory lock por `instanceId` contra bifurcação concorrente.
+- **Fail-Closed em Produção**: Indisponibilidade de PostgreSQL ou Redis bloqueia operações críticas sem fallbacks permissivos.
+
+### 3.2 O que é ADAPTER (Gateways Prontos para Homologação)
+- **Gateway SGP / ERP de Provedor**: Arquitetura padronizada (`SgpService` -> `ISgpAdapter`). Identifica explicitamente se a instância está em modo `REAL`, `ADAPTER`, `MOCK` ou `NOT_CONFIGURED`. Nunca fabrica clientes fictícios quando não configurada.
+- **Telefonia WebRTC / Asterisk SIP**: Interface para PBX Asterisk com suporte a softphone integrado, sinalização SIP e histórico de chamadas vinculado aos contatos.
+- **Gateway Pix / Pagamentos**: Geração de Pix Copia e Cola EMVCo padrão Banco Central com marcação `GATEWAY_PRODUCAO` ou `MOCK_SANDBOX`.
+- **WhatsApp Cloud API**: Adapter para envio de mensagens via Meta Cloud API com verificação de configuração ativa.
+- **Viabilidade Técnica**: Adapter desacoplado com simulação explícita de cobertura óptica identificada como `[MOCK_DEMO_SIMULADO]`.
+
+### 3.3 O que é MOCK / DEMO (Ambiente Local)
+- **Fixtures de Desenvolvimento**: Contratos de exemplo (`CTR-IXC-8821`, `CTR-MK-4412`) restritos à instância de desenvolvimento local `inst-dev-local-001`.
+- **Fallback Heurístico da MaIA**: Isolado e desativado em produção (`NODE_ENV=production`), operando apenas em modo local/teste e explicitamente marcado como `[MOCK/DEMO]`.
 
 ---
 

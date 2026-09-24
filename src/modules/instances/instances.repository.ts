@@ -128,7 +128,11 @@ class InstancesRepository {
       totalCtos: row.totalCtos,
       totalPortasDisponiveis: row.totalPortasDisponiveis,
       versaoMaia: row.versaoMaia,
-      maiaNivelAutonomia: row.maiaNivelAutonomia ?? 3
+      maiaNivelAutonomia: row.maiaNivelAutonomia !== null && row.maiaNivelAutonomia !== undefined
+        ? row.maiaNivelAutonomia
+        : (env.NODE_ENV === 'production' 
+            ? (() => { throw new Error(`maiaNivelAutonomia não configurado para a instância ${row.id} no PostgreSQL.`); })() 
+            : 3)
     };
   }
 }

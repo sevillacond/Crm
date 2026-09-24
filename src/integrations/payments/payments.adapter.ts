@@ -9,14 +9,17 @@ export class PaymentsAdapter implements IPaymentsAdapter {
   }
 
   async gerarPixCobranca(payload: PixCobrancaPayload): Promise<PixCobrancaResult> {
-    const txId = `enlace${Date.now().toString().slice(-8)}${crypto.randomBytes(4).toString('hex')}`;
-    const chave = this.pixKey || 'financeiro@enlacefibra.com.br';
+    const isConfig = this.isConfigurado();
+    const txId = `pix_${Date.now().toString().slice(-8)}${crypto.randomBytes(4).toString('hex')}`;
+    const chave = this.pixKey || (process.env.NODE_ENV === 'production' ? '' : 'sandbox@provedor-demo.local');
+    const nomeProvedor = (process.env.PROVIDER_NOME_FANTASIA || 'PROVEDOR TELECOM').toUpperCase().slice(0, 25);
+    const cidade = (process.env.PROVIDER_CIDADE || 'BRASIL').toUpperCase().slice(0, 15);
 
     // Generates standard EMVCo payload format
-    const copiaECola = `00020126580014br.gov.bcb.pix0136${chave}520400005303986540${payload.valor.toFixed(2).length}${payload.valor.toFixed(2)}5802BR5925ENLACE FIBRA TELECOM6008CAMPINAS62070503***6304`;
+    const copiaECola = `00020126580014br.gov.bcb.pix0136${chave}520400005303986540${payload.valor.toFixed(2).length}${payload.valor.toFixed(2)}5802BR59${nomeProvedor.length.toString().padStart(2, '0')}${nomeProvedor}60${cidade.length.toString().padStart(2, '0')}${cidade}62070503***6304`;
 
     return {
-      modoExecucao: this.isConfigurado() ? 'GATEWAY_PRODUCAO' : 'MOCK_SANDBOX',
+      modoExecucao: isConfig ? 'GATEWAY_PRODUCAO' : 'MOCK_SANDBOX',
       copiaECola,
       txId,
       valor: payload.valor,

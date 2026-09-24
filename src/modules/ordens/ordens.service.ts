@@ -5,11 +5,17 @@ import { OrdemServico, OSStatus } from '../../types/index.ts';
 import { auditoriaService } from '../auditoria/auditoria.service.ts';
 
 class OrdensService {
-  async listAll(instanceId?: string): Promise<OrdemServico[]> {
+  async listAll(instanceId: string): Promise<OrdemServico[]> {
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é obrigatório para listar ordens de serviço.');
+    }
     return ordensRepository.getAll(instanceId);
   }
 
-  async getById(id: string, instanceId?: string): Promise<OrdemServico | null> {
+  async getById(id: string, instanceId: string): Promise<OrdemServico | null> {
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é obrigatório para consultar ordem de serviço.');
+    }
     return ordensRepository.getById(id, instanceId);
   }
 
@@ -55,8 +61,11 @@ class OrdensService {
   async updateStatus(
     id: string,
     status: OSStatus,
-    actor: { id: string; name: string; role: any; instanceId?: string }
+    actor: { id: string; name: string; role: any; instanceId: string }
   ): Promise<OrdemServico | null> {
+    if (!actor || !actor.instanceId) {
+      throw new Error('instanceId é obrigatório para atualizar status de OS.');
+    }
     const updated = await ordensRepository.updateStatus(id, status, actor.instanceId);
     if (updated) {
       await auditoriaService.logEvent({

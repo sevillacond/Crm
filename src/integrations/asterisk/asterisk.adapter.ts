@@ -1,7 +1,7 @@
 import { IAsteriskAdapter } from './asterisk.interface.ts';
 
 export class AsteriskAdapter implements IAsteriskAdapter {
-  private wssUrl = process.env.ASTERISK_WEBRTC_WSS || 'wss://pbx.enlace.internal:8089/ws';
+  private wssUrl = process.env.ASTERISK_WEBRTC_WSS || (process.env.NODE_ENV === 'production' ? '' : 'wss://pbx.demo.internal:8089/ws');
   private stunServer = process.env.STUN_SERVER || 'stun:stun.l.google.com:19302';
 
   isConfigurado(): boolean {

@@ -100,16 +100,17 @@ class ContatosRepository {
   }
 
   async getById(id: string, instanceId: string): Promise<Contato | null> {
-    if (!instanceId && env.NODE_ENV === 'production') {
-      throw new Error('instanceId é estritamente obrigatório para consultar contato em produção.');
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é estritamente obrigatório para consultar contato.');
     }
 
     if (isDbConnected()) {
       try {
-        const conditions = [eq(contatosTable.id, id), isNull(contatosTable.deletedAt)];
-        if (instanceId) {
-          conditions.push(eq(contatosTable.instanceId, instanceId));
-        }
+        const conditions = [
+          eq(contatosTable.id, id),
+          eq(contatosTable.instanceId, instanceId),
+          isNull(contatosTable.deletedAt)
+        ];
 
         const rows = await db
           .select()
@@ -134,7 +135,7 @@ class ContatosRepository {
     }
 
     const found = this.fallbackContatos.find(
-      c => c.id === id && (!instanceId || c.instanceId === instanceId) && !((c as any).deletedAt)
+      c => c.id === id && c.instanceId === instanceId && !((c as any).deletedAt)
     );
     return found || null;
   }

@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS maia_approval_requests (
   executed_by_role VARCHAR(64),
   execution_result JSONB,
   executed_at TIMESTAMP WITH TIME ZONE,
+  expires_at TIMESTAMP WITH TIME ZONE,
   request_id VARCHAR(64),
   correlation_id VARCHAR(64)
 );

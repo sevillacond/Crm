@@ -60,16 +60,17 @@ class DealsRepository {
   }
 
   async getById(id: string, instanceId: string): Promise<Deal | null> {
-    if (!instanceId && env.NODE_ENV === 'production') {
-      throw new Error('instanceId é estritamente obrigatório para consultar negócio em produção.');
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é estritamente obrigatório para consultar negócio.');
     }
 
     if (isDbConnected()) {
       try {
-        const conditions = [eq(dealsTable.id, id), isNull(dealsTable.deletedAt)];
-        if (instanceId) {
-          conditions.push(eq(dealsTable.instanceId, instanceId));
-        }
+        const conditions = [
+          eq(dealsTable.id, id),
+          eq(dealsTable.instanceId, instanceId),
+          isNull(dealsTable.deletedAt)
+        ];
 
         const rows = await db
           .select()
@@ -94,7 +95,7 @@ class DealsRepository {
     }
 
     const found = this.fallbackDeals.find(
-      d => d.id === id && (!instanceId || d.instanceId === instanceId) && !((d as any).deletedAt)
+      d => d.id === id && d.instanceId === instanceId && !((d as any).deletedAt)
     );
     return found || null;
   }

@@ -7,6 +7,7 @@ import { contatosRepository } from '../src/modules/contatos/contatos.repository.
 import { dealsRepository } from '../src/modules/deals/deals.repository.ts';
 import { dealsService } from '../src/modules/deals/deals.service.ts';
 import { planosRepository } from '../src/modules/planos/planos.repository.ts';
+import { ordensRepository } from '../src/modules/ordens/ordens.repository.ts';
 import { usersRepository } from '../src/modules/users/users.repository.ts';
 import { auditoriaRepository } from '../src/modules/auditoria/auditoria.repository.ts';
 import { instancesRepository } from '../src/modules/instances/instances.repository.ts';
@@ -28,6 +29,7 @@ import { validateEnv, env } from '../src/config/env.ts';
 import { checkLoginLockout } from '../src/shared/redis.ts';
 import { maiaRateLimiter } from '../src/api/middlewares/rateLimiter.ts';
 import { Contato } from '../src/types/index.ts';
+import { sgpService } from '../src/modules/sgp/sgp.service.ts';
 
 let passedCount = 0;
 let failedCount = 0;
@@ -724,6 +726,328 @@ async function main() {
     // Instância diferente não enxerga a chamada
     const listaOutra = await telefoniaService.getChamadas('inst-outra-999');
     assert.strictEqual(listaOutra.length, 0);
+  });
+
+  // ==========================================
+  // SUÍTE 7: HARDENING P0.5 — APPROVALS, ISOLAMENTO E POLICY N0-N4
+  // ==========================================
+
+  await runTest('7.1 Approval: Aprovação duplicada é bloqueada (máquina de estados)', async () => {
+    const instId = `inst_p5_double_appr_${Date.now()}`;
+    const req = await maiaApprovalsRepository.createRequest({
+      instanceId: instId,
+      toolName: 'aplicar_desconto_excecao',
+      params: { dealId: 'deal_double_1', desconto: 10 },
+      requestedBy: { userId: 'usr_op_1', name: 'Operador 1', role: 'ATENDENTE' }
+    });
+
+    const sup = createActorContext({
+      id: 'usr_sup_double',
+      instanceId: instId,
+      name: 'Supervisor',
+      email: 'sup@provedor.com.br',
+      role: 'SUPERVISOR',
+      avatar: '',
+      department: 'Vendas',
+      status: 'ONLINE'
+    });
+
+    // Primeira aprovação: SUCESSO
+    const appr1 = await approveToolApproval(req.id, sup);
+    assert.strictEqual(appr1.status, 'APPROVED');
+
+    // Segunda aprovação: BLOQUEADA
+    await assert.rejects(async () => {
+      await approveToolApproval(req.id, sup);
+    }, /não pode ser aprovada|já resolvida/);
+  });
+
+  await runTest('7.2 Approval: Rejeição após aprovação é bloqueada', async () => {
+    const instId = `inst_p5_reject_after_${Date.now()}`;
+    const req = await maiaApprovalsRepository.createRequest({
+      instanceId: instId,
+      toolName: 'aplicar_desconto_excecao',
+      params: { dealId: 'deal_reject_1', desconto: 12 },
+      requestedBy: { userId: 'usr_op_2', name: 'Operador 2', role: 'ATENDENTE' }
+    });
+
+    const sup = createActorContext({
+      id: 'usr_sup_reject',
+      instanceId: instId,
+      name: 'Supervisor',
+      email: 'sup@provedor.com.br',
+      role: 'SUPERVISOR',
+      avatar: '',
+      department: 'Vendas',
+      status: 'ONLINE'
+    });
+
+    await approveToolApproval(req.id, sup);
+
+    // Tentar rejeitar solicitação que já está APPROVED: BLOQUEADA
+    await assert.rejects(async () => {
+      await rejectToolApproval(req.id, sup, 'Tentando rejeitar pós-aprovação');
+    }, /não pode ser rejeitada|já resolvida/);
+  });
+
+  await runTest('7.3 Approval: Expiração impede aprovação e execução (expiresAt)', async () => {
+    const instId = `inst_p5_expire_${Date.now()}`;
+    const pastDate = new Date(Date.now() - 5000); // Expirado há 5 segundos
+    const req = await maiaApprovalsRepository.createRequest({
+      instanceId: instId,
+      toolName: 'aplicar_desconto_excecao',
+      params: { dealId: 'deal_exp_1', desconto: 10 },
+      requestedBy: { userId: 'usr_op_exp', name: 'Operador Exp', role: 'ATENDENTE' },
+      expiresAt: pastDate
+    });
+
+    const sup = createActorContext({
+      id: 'usr_sup_exp',
+      instanceId: instId,
+      name: 'Supervisor',
+      email: 'sup@provedor.com.br',
+      role: 'SUPERVISOR',
+      avatar: '',
+      department: 'Vendas',
+      status: 'ONLINE'
+    });
+
+    // Tentativa de aprovar item expirado -> BLOQUEADA
+    await assert.rejects(async () => {
+      await approveToolApproval(req.id, sup);
+    }, /expirou/);
+  });
+
+  await runTest('7.4 Isolamento: Instância A não acessa Deals da Instância B', async () => {
+    const instA = `inst_iso_deal_A_${Date.now()}`;
+    const instB = `inst_iso_deal_B_${Date.now()}`;
+
+    const dealB = await dealsRepository.create({
+      id: `dl_b_${Date.now()}`,
+      titulo: 'Negócio Secreto Instância B',
+      contatoId: 'c_b',
+      planoId: 'pl_b',
+      etapa: 'PROPOSTA',
+      valorMensal: 199.90,
+      taxaAdesao: 0,
+      probabilidade: 60,
+      dataPrevisao: '2026-10-01',
+      responsavelId: 'u_b',
+      statusViabilidade: 'VIAVEL_CTO',
+      notas: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }, instB);
+
+    const lookupFromA = await dealsRepository.getById(dealB.id, instA);
+    assert.strictEqual(lookupFromA, null, 'Instância A não pode recuperar Deal da Instância B');
+  });
+
+  await runTest('7.5 Isolamento: Instância A não acessa Ordens de Serviço da Instância B', async () => {
+    const instA = `inst_iso_os_A_${Date.now()}`;
+    const instB = `inst_iso_os_B_${Date.now()}`;
+
+    const osB = await ordensRepository.create({
+      id: `os_b_${Date.now()}`,
+      contatoId: 'c_b_os',
+      clienteNome: 'Cliente Instância B',
+      telefone: '11999990000',
+      endereco: 'Rua B, 100',
+      bairro: 'Centro',
+      tipo: 'INSTALACAO',
+      status: 'AGENDADA',
+      planoNome: 'Fibra 500 Mega',
+      tecnicoId: 'tec_1',
+      tecnicoNome: 'Técnico Teste',
+      dataAgendada: '2026-10-05',
+      periodo: 'MANHA',
+      ctoDesignada: 'CTO-01',
+      portaCto: 1,
+      checklist: {
+        passagemDrop: false,
+        conectorizacaoFusao: false,
+        testePotenciaOptica: false,
+        provisionamentoOLT: false,
+        speedtestValido: false,
+        assinaturaCliente: false
+      }
+    }, instB);
+
+    const lookupFromA = await ordensRepository.getById(osB.id, instA);
+    assert.strictEqual(lookupFromA, null, 'Instância A não pode recuperar OS da Instância B');
+  });
+
+  await runTest('7.6 Isolamento: Instância A não acessa trilha de Auditoria da Instância B', async () => {
+    const instA = `inst_iso_aud_A_${Date.now()}`;
+    const instB = `inst_iso_aud_B_${Date.now()}`;
+
+    await auditoriaRepository.save({
+      instanceId: instB,
+      actorId: 'usr_b',
+      actorName: 'Operador B',
+      actorRole: 'ATENDENTE',
+      action: 'OPERACAO_CONFIDENCIAL_B',
+      entityType: 'LEAD',
+      entityId: 'lead_b_1',
+      details: 'Ação restrita à Instância B'
+    });
+
+    const logsA = await auditoriaRepository.list(instA);
+    const hasLogB = logsA.some((l: any) => l.details.includes('Ação restrita à Instância B'));
+    assert.strictEqual(hasLogB, false, 'Instância A não pode enxergar logs de auditoria da Instância B');
+  });
+
+  await runTest('7.7 Policy Engine: Validação da escala completa de autonomia (N0 a N4)', async () => {
+    const instPolicy = `inst_policy_scale_${Date.now()}`;
+    await instancesRepository.update(instPolicy, { maiaNivelAutonomia: 0 });
+    maiaPolicyEngine.invalidateCache(instPolicy);
+
+    const actor = createActorContext({
+      id: 'usr_policy_test',
+      instanceId: instPolicy,
+      name: 'Operador Teste',
+      email: 'op@provedor.com.br',
+      role: 'ATENDENTE',
+      avatar: '',
+      department: 'Comercial',
+      status: 'ONLINE'
+    });
+
+    // N0: Bloqueia tudo
+    const resN0 = await maiaPolicyEngine.evaluateToolExecution('recomendar_plano', instPolicy, {
+      nivelMinimoAutonomia: 1,
+      requerAprovacaoHumana: false
+    });
+    assert.strictEqual(resN0.permitido, false);
+    assert.strictEqual(resN0.nivel, 0);
+
+    // N1: Informativa - Permite leitura (N1), bloqueia ação assistida (N2)
+    await maiaPolicyEngine.setNivel(1, instPolicy);
+    const resN1Read = await maiaPolicyEngine.evaluateToolExecution('recomendar_plano', instPolicy, {
+      nivelMinimoAutonomia: 1,
+      requerAprovacaoHumana: false
+    });
+    assert.strictEqual(resN1Read.permitido, true);
+
+    const resN1Action = await maiaPolicyEngine.evaluateToolExecution('qualificar_lead', instPolicy, {
+      nivelMinimoAutonomia: 2,
+      requerAprovacaoHumana: false
+    });
+    assert.strictEqual(resN1Action.permitido, false, 'N1 não pode executar ferramentas de nível N2');
+
+    // N2: Assistida - Permite N2, bloqueia financeira N3 sem aprovação
+    await maiaPolicyEngine.setNivel(2, instPolicy);
+    const resN2Action = await maiaPolicyEngine.evaluateToolExecution('qualificar_lead', instPolicy, {
+      nivelMinimoAutonomia: 2,
+      requerAprovacaoHumana: false
+    });
+    assert.strictEqual(resN2Action.permitido, true);
+
+    const resN2Fin = await maiaPolicyEngine.evaluateToolExecution('aplicar_desconto_excecao', instPolicy, {
+      nivelMinimoAutonomia: 3,
+      requerAprovacaoHumana: true
+    });
+    assert.strictEqual(resN2Fin.permitido, false, 'N2 não pode executar ferramentas de nível N3');
+
+    // N3: Human-in-the-Loop - Permite N3 com aprovação humana obrigatória
+    await maiaPolicyEngine.setNivel(3, instPolicy);
+    const resN3 = await maiaPolicyEngine.evaluateToolExecution('aplicar_desconto_excecao', instPolicy, {
+      nivelMinimoAutonomia: 3,
+      requerAprovacaoHumana: true
+    });
+    assert.strictEqual(resN3.permitido, true);
+    assert.strictEqual(resN3.requerAprovacaoHumana, true, 'N3 exige aprovação humana');
+
+    // N4: Autonomia Avançada
+    await maiaPolicyEngine.setNivel(4, instPolicy);
+    const nivelN4 = await maiaPolicyEngine.getNivel(instPolicy);
+    assert.strictEqual(nivelN4, 4);
+  });
+
+  await runTest('7.8 Approval: setExecuted e setFailed bloqueados se não estiver em EXECUTING', async () => {
+    const inst = `inst_approval_sm_${Date.now()}`;
+    const req = await maiaApprovalsRepository.createRequest({
+      instanceId: inst,
+      toolName: 'aplicar_desconto_excecao',
+      params: { dealId: 'deal_test', desconto: 10 },
+      requestedBy: { userId: 'usr_req', name: 'Solicitante', role: 'ATENDENTE' }
+    });
+
+    // Tentar setExecuted direto de PENDING_APPROVAL deve ser rejeitado pela máquina de estados
+    try {
+      await maiaApprovalsRepository.setExecuted(req.id, inst, { ok: true });
+      assert.fail('Deveria ter bloqueado setExecuted a partir de PENDING_APPROVAL');
+    } catch (err: any) {
+      assert(
+        err.message.includes('EXECUTING'),
+        `Esperava menção a EXECUTING, recebido: ${err.message}`
+      );
+    }
+
+    // Tentar setFailed direto de PENDING_APPROVAL deve ser rejeitado
+    try {
+      await maiaApprovalsRepository.setFailed(req.id, inst, { error: 'falha' });
+      assert.fail('Deveria ter bloqueado setFailed a partir de PENDING_APPROVAL');
+    } catch (err: any) {
+      assert(
+        err.message.includes('EXECUTING'),
+        `Esperava menção a EXECUTING, recebido: ${err.message}`
+      );
+    }
+  });
+
+  await runTest('7.9 SGP Gateway: Instância não configurada nunca fabrica clientes (NOT_CONFIGURED)', async () => {
+    const instUnconfigured = `inst_unconfigured_sgp_${Date.now()}`;
+    const status = sgpService.getIntegrationStatus(instUnconfigured);
+    assert.strictEqual(status.status, 'NOT_CONFIGURED');
+
+    const contracts = await sgpService.getContracts(instUnconfigured);
+    assert.strictEqual(contracts.length, 0, 'Instância não configurada deve retornar 0 contratos (nunca fabricar dados)');
+
+    const contractById = await sgpService.getContractById('CTR-NONEXISTENT', instUnconfigured);
+    assert.strictEqual(contractById, null, 'Contrato inexistente deve retornar null');
+  });
+
+  await runTest('7.10 Isolamento: Repositórios de domínio rejeitam consultas sem instanceId', async () => {
+    // 1. Contatos
+    try {
+      await contatosRepository.getById('c1', '');
+      assert.fail('Deveria exigir instanceId em contatosRepository.getById');
+    } catch (err: any) {
+      assert(err.message.includes('instanceId é estritamente obrigatório'));
+    }
+
+    // 2. Deals
+    try {
+      await dealsRepository.getById('dl1', '');
+      assert.fail('Deveria exigir instanceId em dealsRepository.getById');
+    } catch (err: any) {
+      assert(err.message.includes('instanceId é estritamente obrigatório'));
+    }
+
+    // 3. Planos
+    try {
+      await planosRepository.getAll('');
+      assert.fail('Deveria exigir instanceId em planosRepository.getAll');
+    } catch (err: any) {
+      assert(err.message.includes('instanceId é obrigatório'));
+    }
+
+    // 4. Ordens de Serviço
+    try {
+      await ordensRepository.getAll('');
+      assert.fail('Deveria exigir instanceId em ordensRepository.getAll');
+    } catch (err: any) {
+      assert(err.message.includes('instanceId é obrigatório'));
+    }
+
+    // 5. Auditoria
+    try {
+      await auditoriaRepository.list('');
+      assert.fail('Deveria exigir instanceId em auditoriaRepository.list');
+    } catch (err: any) {
+      assert(err.message.includes('instanceId é estritamente obrigatório'));
+    }
   });
 
   console.log('\n------------------------------------------------------');

@@ -25,6 +25,7 @@ export const maiaApprovalRequestsTable = pgTable('maia_approval_requests', {
   executedByRole: varchar('executed_by_role', { length: 64 }),
   executionResult: jsonb('execution_result'),
   executedAt: timestamp('executed_at', { withTimezone: true }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
   requestId: varchar('request_id', { length: 64 }),
   correlationId: varchar('correlation_id', { length: 64 })
 });
