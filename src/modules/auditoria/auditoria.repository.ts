@@ -1,6 +1,6 @@
 import { db, isDbConnected } from '../../db/client.ts';
 import { auditEventsTable, AuditEventDb } from '../../db/schema/auditEvents.ts';
-import { desc, eq } from 'drizzle-orm';
+import { desc, eq, sql } from 'drizzle-orm';
 import { INITIAL_AUDIT_LOGS } from '../../data/mockData.ts';
 import { AuditLog, Role } from '../../types/index.ts';
 import { env } from '../../config/env.ts';
@@ -27,6 +27,8 @@ export interface AuditEventInput {
 }
 
 class AuditoriaRepository {
+  private memoryLocks = new Map<string, Promise<any>>();
+
   private fallbackEvents: (AuditLog & { instanceId?: string; hashIntegridade?: string; previousHash?: string })[] =
     INITIAL_AUDIT_LOGS.map(l => ({
       ...l,
@@ -34,6 +36,25 @@ class AuditoriaRepository {
       hashIntegridade: 'GENESIS_inst-enlace-fibra-001_2026',
       previousHash: 'ROOT'
     }));
+
+  private async withMemoryLock<T>(instanceId: string, fn: () => Promise<T>): Promise<T> {
+    const previousLock = this.memoryLocks.get(instanceId) || Promise.resolve();
+    let resolveCurrent: () => void;
+    const currentLock = new Promise<void>((resolve) => {
+      resolveCurrent = resolve;
+    });
+    this.memoryLocks.set(instanceId, currentLock);
+
+    try {
+      await previousLock;
+      return await fn();
+    } finally {
+      resolveCurrent!();
+      if (this.memoryLocks.get(instanceId) === currentLock) {
+        this.memoryLocks.delete(instanceId);
+      }
+    }
+  }
 
   async list(instanceId?: string, limit: number = 100): Promise<AuditLog[]> {
     if (!instanceId && env.NODE_ENV === 'production') {
@@ -84,6 +105,9 @@ class AuditoriaRepository {
     if (isDbConnected()) {
       try {
         const result = await db.transaction(async (tx) => {
+          // P1: PostgreSQL Advisory Lock por instanceId serializa gravações concorrentes sem bifurcação
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${finalInstanceId}))`);
+
           // Determinar previousHash da cadeia da instância dentro da transação segura
           const lastRow = await tx
             .select({ hashIntegridade: auditEventsTable.hashIntegridade })
@@ -153,33 +177,35 @@ class AuditoriaRepository {
       throw new Error('Falha de integridade: Tentativa de registrar auditoria em memória em ambiente de produção.');
     }
 
-    // Fallback apenas em dev/test: Encontrar o último hash da instância específica
-    const instanceEvents = this.fallbackEvents.filter(e => e.instanceId === finalInstanceId);
-    const previousHash = instanceEvents.length > 0 && instanceEvents[0].hashIntegridade
-      ? instanceEvents[0].hashIntegridade
-      : `GENESIS_${finalInstanceId}_2026`;
+    // Fallback apenas em dev/test serializado por instanceId
+    return this.withMemoryLock(finalInstanceId, async () => {
+      const instanceEvents = this.fallbackEvents.filter(e => e.instanceId === finalInstanceId);
+      const previousHash = instanceEvents.length > 0 && instanceEvents[0].hashIntegridade
+        ? instanceEvents[0].hashIntegridade
+        : `GENESIS_${finalInstanceId}_2026`;
 
-    const hashData = `${previousHash}|${id}|${finalInstanceId}|${timestampStr}|${input.actorId}|${input.action}|${input.entityType}|${input.entityId}|${input.details}`;
-    const hashIntegridade = crypto.createHash('sha256').update(hashData).digest('hex');
+      const hashData = `${previousHash}|${id}|${finalInstanceId}|${timestampStr}|${input.actorId}|${input.action}|${input.entityType}|${input.entityId}|${input.details}`;
+      const hashIntegridade = crypto.createHash('sha256').update(hashData).digest('hex');
 
-    const savedEvent = {
-      id,
-      timestamp: timestampStr,
-      actorId: input.actorId,
-      actorName: input.actorName,
-      actorRole: input.actorRole as Role,
-      action: input.action,
-      entityType: input.entityType as any,
-      entityId: input.entityId,
-      details: input.details,
-      isMaiaAction: !!input.isMaiaAction,
-      instanceId: finalInstanceId,
-      hashIntegridade,
-      previousHash
-    };
+      const savedEvent = {
+        id,
+        timestamp: timestampStr,
+        actorId: input.actorId,
+        actorName: input.actorName,
+        actorRole: input.actorRole as Role,
+        action: input.action,
+        entityType: input.entityType as any,
+        entityId: input.entityId,
+        details: input.details,
+        isMaiaAction: !!input.isMaiaAction,
+        instanceId: finalInstanceId,
+        hashIntegridade,
+        previousHash
+      };
 
-    this.fallbackEvents.unshift(savedEvent);
-    return savedEvent;
+      this.fallbackEvents.unshift(savedEvent);
+      return savedEvent;
+    });
   }
 
   async create(input: AuditEventInput): Promise<AuditLog & { hashIntegridade: string; previousHash: string }> {

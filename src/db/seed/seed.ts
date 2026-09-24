@@ -70,6 +70,12 @@ export async function bootstrapProduction(client: any): Promise<void> {
   }
 
   // 3. Official Dedicated Instance Record
+  const providerCnpj = env.NODE_ENV === 'production' ? env.PROVIDER_CNPJ! : (process.env.PROVIDER_CNPJ || '45.123.890/0001-92');
+  const providerRazaoSocial = env.NODE_ENV === 'production' ? env.PROVIDER_RAZAO_SOCIAL! : (process.env.PROVIDER_RAZAO_SOCIAL || 'Enlace Telecomunicações e Fibra Óptica Ltda');
+  const providerNomeFantasia = env.NODE_ENV === 'production' ? env.PROVIDER_NOME_FANTASIA! : (process.env.PROVIDER_NOME_FANTASIA || 'Enlace Fibra');
+  const providerCidade = env.NODE_ENV === 'production' ? env.PROVIDER_CIDADE! : (process.env.PROVIDER_CIDADE || 'Campinas');
+  const providerUf = env.NODE_ENV === 'production' ? env.PROVIDER_UF! : (process.env.PROVIDER_UF || 'SP');
+
   await client.query(
     `INSERT INTO instances (
       id, cnpj, razao_social, nome_fantasia, cidade_sede, uf, timezone,
@@ -80,11 +86,11 @@ export async function bootstrapProduction(client: any): Promise<void> {
       cidade_sede = EXCLUDED.cidade_sede`,
     [
       instanceId,
-      process.env.PROVIDER_CNPJ || '45.123.890/0001-92',
-      process.env.PROVIDER_RAZAO_SOCIAL || 'Enlace Telecomunicações e Fibra Óptica Ltda',
-      process.env.PROVIDER_NOME_FANTASIA || 'Enlace Fibra',
-      process.env.PROVIDER_CIDADE || 'Campinas',
-      process.env.PROVIDER_UF || 'SP',
+      providerCnpj,
+      providerRazaoSocial,
+      providerNomeFantasia,
+      providerCidade,
+      providerUf,
       'America/Sao_Paulo',
       'ISOLADA_ATIVA',
       'PostgreSQL 16.2 (Dedicado)',
@@ -96,8 +102,16 @@ export async function bootstrapProduction(client: any): Promise<void> {
   );
 
   // 4. Initial Root Administrator (Never hardcoded or default in production)
-  const adminEmail = (process.env.ADMIN_INITIAL_EMAIL || 'admin@enlace.net.br').toLowerCase().trim();
-  const adminPassword = process.env.ADMIN_INITIAL_PASSWORD || (env.NODE_ENV !== 'production' ? 'DevAdmin@2026!' : '');
+  const adminEmail = (
+    env.NODE_ENV === 'production'
+      ? env.ADMIN_INITIAL_EMAIL!
+      : (process.env.ADMIN_INITIAL_EMAIL || 'admin@enlace.net.br')
+  ).toLowerCase().trim();
+
+  const adminPassword = env.NODE_ENV === 'production'
+    ? env.ADMIN_INITIAL_PASSWORD!
+    : (process.env.ADMIN_INITIAL_PASSWORD || 'DevAdmin@2026!');
+
   if (!adminPassword) {
     throw new Error('[FATAL] ADMIN_INITIAL_PASSWORD não informada para criação do administrador raiz.');
   }

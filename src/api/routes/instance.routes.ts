@@ -27,8 +27,11 @@ router.patch(
   requirePermission('instancia:update'),
   async (req: Request, res: Response, next) => {
     try {
-      const instanceId = req.instanceId || (await instancesService.getInstance()).instanceId;
-      const updated = await instancesService.updateInstance(instanceId, req.body);
+      if (!req.instanceId) {
+        res.status(401).json({ error: { code: 'MISSING_INSTANCE_CONTEXT', message: 'Contexto de instância ausente.' } });
+        return;
+      }
+      const updated = await instancesService.updateInstance(req.instanceId, req.body);
       res.json(updated);
     } catch (err) {
       next(err);

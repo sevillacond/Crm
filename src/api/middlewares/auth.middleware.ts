@@ -56,23 +56,22 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
       return;
     }
 
-    const effectiveInstanceId = dbUser.instanceId || payload.instanceId;
-    if (!effectiveInstanceId) {
-      res.status(401).json({
+    // P0: Isolamento estrito JWT x Usuário x Instância
+    if (!payload.instanceId || !dbUser.instanceId || payload.instanceId !== dbUser.instanceId) {
+      res.status(403).json({
         error: {
-          code: 'MISSING_INSTANCE_CONTEXT',
-          message: 'Usuário autenticado não possui vínculo com nenhuma instância válida.'
+          code: 'INSTANCE_CONTEXT_MISMATCH',
+          message: 'Conflito de isolamento: Identificador de instância no token JWT diverge do registro do usuário no banco.'
         }
       });
       return;
     }
 
+    const effectiveInstanceId = dbUser.instanceId;
+
     // Consolidated ActorContext (Section 4)
     const actor = createActorContext(
-      {
-        ...dbUser,
-        instanceId: effectiveInstanceId
-      },
+      dbUser,
       {
         ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress,
         userAgent: req.headers['user-agent'] as string,

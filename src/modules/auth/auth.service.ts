@@ -65,9 +65,9 @@ class AuthService {
     // Reset failed attempts on success
     await clearFailedLogin(rateKey);
 
-    const instanceId = userWithAuth.instanceId || env.INSTANCE_ID;
+    const instanceId = userWithAuth.instanceId || (env.NODE_ENV !== 'production' ? (env.INSTANCE_ID || 'inst-dev-local-001') : '');
     if (!instanceId) {
-      throw new Error('Usuário autenticado sem instanceId associado. Contate o administrador do sistema.');
+      throw new Error('Usuário autenticado sem instanceId associado. Operação bloqueada em produção.');
     }
 
     const user: User = {
@@ -151,8 +151,11 @@ class AuthService {
     await sessionsRepository.revokeSession(token);
 
     if (user) {
+      if (!user.instanceId && env.NODE_ENV === 'production') {
+        throw new Error('Falha de auditoria no logout: instanceId ausente em produção.');
+      }
       await auditoriaService.logEvent({
-        instanceId: user.instanceId || 'inst_unknown',
+        instanceId: user.instanceId,
         actorId: user.id,
         actorName: user.name,
         actorRole: user.role,

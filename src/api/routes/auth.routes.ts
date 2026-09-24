@@ -16,6 +16,15 @@ router.post('/login', validateBody(loginSchema), async (req: Request, res: Respo
     const session = await authService.login(email, password, ip, userAgent);
     res.json(session);
   } catch (err: any) {
+    if (err.message === 'AUTH_SECURITY_UNAVAILABLE') {
+      res.status(503).json({
+        error: {
+          code: 'AUTH_SECURITY_UNAVAILABLE',
+          message: 'Serviço de autenticação temporariamente indisponível por política de segurança.'
+        }
+      });
+      return;
+    }
     res.status(401).json({
       error: {
         code: 'AUTH_FAILED',

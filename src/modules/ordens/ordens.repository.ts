@@ -69,7 +69,10 @@ class OrdensRepository {
   }
 
   async create(os: OrdemServico, instanceId?: string): Promise<OrdemServico> {
-    const finalInstanceId = instanceId || (os as any).instanceId || env.INSTANCE_ID || 'inst-enlace-fibra-001';
+    const finalInstanceId = instanceId || (os as any).instanceId || (env.NODE_ENV !== 'production' ? (env.INSTANCE_ID || 'inst-dev-local-001') : '');
+    if (!finalInstanceId) {
+      throw new Error('instanceId é obrigatório para cadastrar Ordem de Serviço em produção.');
+    }
 
     if (isDbConnected()) {
       try {

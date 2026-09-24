@@ -11,8 +11,25 @@ export interface AppConfig {
   INSTANCE_ID?: string;
   ADMIN_INITIAL_EMAIL?: string;
   ADMIN_INITIAL_PASSWORD?: string;
+  PROVIDER_CNPJ?: string;
+  PROVIDER_RAZAO_SOCIAL?: string;
+  PROVIDER_NOME_FANTASIA?: string;
+  PROVIDER_CIDADE?: string;
+  PROVIDER_UF?: string;
   GEMINI_API_KEY?: string;
 }
+
+const FORBIDDEN_PASSWORDS = [
+  'change_me',
+  'mudarurgente@2026!',
+  'enlace@2026!',
+  'devadmin@2026!',
+  'password',
+  'admin',
+  '123456',
+  'root',
+  'teste'
+];
 
 export function validateEnv(overrideEnv?: Record<string, string | undefined>): AppConfig {
   const envSource = overrideEnv || process.env;
@@ -49,11 +66,14 @@ export function validateEnv(overrideEnv?: Record<string, string | undefined>): A
     }
   }
 
-  // 3. Admin Initial Password validation (P0: Eliminar completamente senhas default de produção)
+  // 3. Admin Initial Password validation (P0/P1: Eliminar completamente senhas default de produção)
   const adminInitialPassword = envSource.ADMIN_INITIAL_PASSWORD;
   if (isProduction) {
-    if (!adminInitialPassword || adminInitialPassword === 'CHANGE_ME' || adminInitialPassword === 'MudarUrgente@2026!' || adminInitialPassword.trim() === '') {
-      failFast('[FATAL] Em ambiente de PRODUÇÃO, ADMIN_INITIAL_PASSWORD é estritamente obrigatória para inicialização do administrador raiz (senhas default proibidas).');
+    if (!adminInitialPassword || adminInitialPassword.trim() === '') {
+      failFast('[FATAL] Em ambiente de PRODUÇÃO, ADMIN_INITIAL_PASSWORD é estritamente obrigatória para inicialização do administrador raiz.');
+    }
+    if (FORBIDDEN_PASSWORDS.includes(adminInitialPassword!.toLowerCase().trim())) {
+      failFast('[FATAL] Em ambiente de PRODUÇÃO, o uso de senhas padrão/conhecidas em ADMIN_INITIAL_PASSWORD é estritamente proibido.');
     }
   }
 
@@ -65,7 +85,43 @@ export function validateEnv(overrideEnv?: Record<string, string | undefined>): A
     }
   }
 
-  // 5. CORS Origins validation
+  // 5. Admin Initial Email validation (P1: Eliminar identidade default em produção)
+  const adminInitialEmail = envSource.ADMIN_INITIAL_EMAIL;
+  if (isProduction) {
+    if (!adminInitialEmail || adminInitialEmail.trim() === '') {
+      failFast('[FATAL] Em ambiente de PRODUÇÃO, ADMIN_INITIAL_EMAIL é obrigatório.');
+    }
+    if (adminInitialEmail!.toLowerCase().trim() === 'admin@enlace.net.br') {
+      failFast('[FATAL] Em ambiente de PRODUÇÃO, o e-mail padrão de demonstração admin@enlace.net.br é estritamente proibido.');
+    }
+  }
+
+  // 6. Provider Identity validation (P1: Bootstrap sem dados padrão em produção)
+  const providerCnpj = envSource.PROVIDER_CNPJ;
+  const providerRazaoSocial = envSource.PROVIDER_RAZAO_SOCIAL;
+  const providerNomeFantasia = envSource.PROVIDER_NOME_FANTASIA;
+  const providerCidade = envSource.PROVIDER_CIDADE;
+  const providerUf = envSource.PROVIDER_UF;
+
+  if (isProduction) {
+    if (!providerCnpj || providerCnpj.trim() === '' || providerCnpj.trim() === '45.123.890/0001-92') {
+      failFast('[FATAL] Em ambiente de PRODUÇÃO, PROVIDER_CNPJ é obrigatório e não pode ser o CNPJ de demonstração.');
+    }
+    if (!providerRazaoSocial || providerRazaoSocial.trim() === '' || providerRazaoSocial.trim() === 'Enlace Telecomunicações e Fibra Óptica Ltda') {
+      failFast('[FATAL] Em ambiente de PRODUÇÃO, PROVIDER_RAZAO_SOCIAL é obrigatória e não pode ser a Razão Social de demonstração.');
+    }
+    if (!providerNomeFantasia || providerNomeFantasia.trim() === '' || providerNomeFantasia.trim() === 'Enlace Fibra') {
+      failFast('[FATAL] Em ambiente de PRODUÇÃO, PROVIDER_NOME_FANTASIA é obrigatório e não pode ser o Nome Fantasia de demonstração.');
+    }
+    if (!providerCidade || providerCidade.trim() === '') {
+      failFast('[FATAL] Em ambiente de PRODUÇÃO, PROVIDER_CIDADE é obrigatória.');
+    }
+    if (!providerUf || providerUf.trim() === '') {
+      failFast('[FATAL] Em ambiente de PRODUÇÃO, PROVIDER_UF é obrigatória.');
+    }
+  }
+
+  // 7. CORS Origins validation
   const rawCorsOrigins = envSource.CORS_ORIGINS || '';
   const corsOrigins = rawCorsOrigins
     ? rawCorsOrigins.split(',').map((o: string) => o.trim()).filter(Boolean)
@@ -79,8 +135,13 @@ export function validateEnv(overrideEnv?: Record<string, string | undefined>): A
     REDIS_URL: envSource.REDIS_URL,
     CORS_ORIGINS: corsOrigins,
     INSTANCE_ID: instanceId,
-    ADMIN_INITIAL_EMAIL: envSource.ADMIN_INITIAL_EMAIL,
+    ADMIN_INITIAL_EMAIL: adminInitialEmail,
     ADMIN_INITIAL_PASSWORD: adminInitialPassword,
+    PROVIDER_CNPJ: providerCnpj,
+    PROVIDER_RAZAO_SOCIAL: providerRazaoSocial,
+    PROVIDER_NOME_FANTASIA: providerNomeFantasia,
+    PROVIDER_CIDADE: providerCidade,
+    PROVIDER_UF: providerUf,
     GEMINI_API_KEY: envSource.GEMINI_API_KEY
   };
 }

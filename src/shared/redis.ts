@@ -64,6 +64,24 @@ export function isRedisConnected(): boolean {
 export async function checkLoginLockout(
   key: string
 ): Promise<{ locked: boolean; waitSeconds: number }> {
+  // P0: Em produção, falha do Redis bloqueia autenticação (FAIL CLOSED - AUTH_SECURITY_UNAVAILABLE)
+  if (env.NODE_ENV === 'production') {
+    if (!isRedisConnected() || !redisClient) {
+      throw new Error('AUTH_SECURITY_UNAVAILABLE');
+    }
+    try {
+      const lockKey = `auth:lockout:${key}`;
+      const ttl = await redisClient.ttl(lockKey);
+      if (ttl > 0) {
+        return { locked: true, waitSeconds: ttl };
+      }
+      return { locked: false, waitSeconds: 0 };
+    } catch (err) {
+      throw new Error('AUTH_SECURITY_UNAVAILABLE');
+    }
+  }
+
+  // Modo desenvolvimento / teste com Redis conectado
   if (isRedisConnected() && redisClient) {
     try {
       const lockKey = `auth:lockout:${key}`;
@@ -73,7 +91,7 @@ export async function checkLoginLockout(
       }
       return { locked: false, waitSeconds: 0 };
     } catch (err) {
-      // Fall through to memory store
+      // Fall through to memory store in dev/test only
     }
   }
 
@@ -95,6 +113,32 @@ export async function recordFailedLogin(
   maxAttempts: number = 5,
   lockDurationSeconds: number = 300 // 5 minutes
 ): Promise<{ count: number; locked: boolean; waitSeconds: number }> {
+  // P0: Em produção, falha do Redis bloqueia autenticação (FAIL CLOSED - AUTH_SECURITY_UNAVAILABLE)
+  if (env.NODE_ENV === 'production') {
+    if (!isRedisConnected() || !redisClient) {
+      throw new Error('AUTH_SECURITY_UNAVAILABLE');
+    }
+    try {
+      const attemptKey = `auth:attempts:${key}`;
+      const lockKey = `auth:lockout:${key}`;
+
+      const count = await redisClient.incr(attemptKey);
+      if (count === 1) {
+        await redisClient.expire(attemptKey, lockDurationSeconds);
+      }
+
+      if (count >= maxAttempts) {
+        await redisClient.set(lockKey, 'LOCKED', 'EX', lockDurationSeconds);
+        await redisClient.del(attemptKey);
+        return { count, locked: true, waitSeconds: lockDurationSeconds };
+      }
+
+      return { count, locked: false, waitSeconds: 0 };
+    } catch (err) {
+      throw new Error('AUTH_SECURITY_UNAVAILABLE');
+    }
+  }
+
   if (isRedisConnected() && redisClient) {
     try {
       const attemptKey = `auth:attempts:${key}`;
@@ -113,11 +157,11 @@ export async function recordFailedLogin(
 
       return { count, locked: false, waitSeconds: 0 };
     } catch (err) {
-      // Fall through to memory store
+      // Fall through to memory store in dev/test only
     }
   }
 
-  // Memory fallback
+  // Memory fallback apenas em dev/test
   const now = Date.now();
   const entry = memoryLockoutStore.get(key) || { count: 0, lockedUntil: 0, resetAt: now + lockDurationSeconds * 1000 };
 
@@ -142,6 +186,20 @@ export async function recordFailedLogin(
  * Clear failed login attempts on successful login
  */
 export async function clearFailedLogin(key: string): Promise<void> {
+  if (env.NODE_ENV === 'production') {
+    if (!isRedisConnected() || !redisClient) {
+      throw new Error('AUTH_SECURITY_UNAVAILABLE');
+    }
+    try {
+      const attemptKey = `auth:attempts:${key}`;
+      const lockKey = `auth:lockout:${key}`;
+      await redisClient.del(attemptKey, lockKey);
+      return;
+    } catch (err) {
+      throw new Error('AUTH_SECURITY_UNAVAILABLE');
+    }
+  }
+
   if (isRedisConnected() && redisClient) {
     try {
       const attemptKey = `auth:attempts:${key}`;

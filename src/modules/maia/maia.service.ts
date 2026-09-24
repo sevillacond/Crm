@@ -1,12 +1,12 @@
-import { GoogleGenAI } from '@google/genai';
 import { maiaPolicyEngine } from './policyEngine.ts';
-import { MAIA_TOOL_REGISTRY } from './toolRegistry.ts';
+import { executeMaiaTool, MAIA_TOOL_REGISTRY } from './toolRegistry.ts';
 import { auditoriaService } from '../auditoria/auditoria.service.ts';
 import { instancesService } from '../instances/instances.service.ts';
 import { planosService } from '../planos/planos.service.ts';
 import { contatosRepository } from '../contatos/contatos.repository.ts';
 import { dealsRepository } from '../deals/deals.repository.ts';
 import { ActorContext } from '../auth/actorContext.ts';
+import { getLlmProvider } from './llm/index.ts';
 
 export interface MaiaChatInput {
   prompt: string;
@@ -19,6 +19,7 @@ export interface MaiaChatOutput {
   resposta: string;
   toolExecutada?: string;
   parametrosTool?: any;
+  approvalId?: string;
   auditId?: string;
   nivelAutonomia: number;
 }
@@ -32,7 +33,7 @@ class MaiaService {
       throw new Error('Acesso negado à MaIA: Contexto de autorização ou instanceId ausente.');
     }
 
-    // Carregar nível persistente da instância
+    // P0: Carregar nível persistente da instância (Fail-Closed se banco indisponível)
     const nivel = await maiaPolicyEngine.loadNivelForInstance(actor.instanceId);
     if (nivel === 0) {
       return {
@@ -67,62 +68,101 @@ ${targetDeal ? `Negócio em foco: ${targetDeal.titulo}, Etapa: ${targetDeal.etap
 
     let aiResponseText = '';
     let toolActionExecuted: any = null;
+    let pendingApprovalId: string | undefined;
 
-    // 1. Check if Gemini 2.5 Flash is configured
-    if (process.env.GEMINI_API_KEY && !process.env.GEMINI_API_KEY.includes('CHANGE_ME')) {
-      try {
-        const ai = new GoogleGenAI();
-        const response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: [
-            { role: 'user', parts: [{ text: `${systemContext}\n\nSolicitação do Operador: ${input.prompt}` }] }
-          ]
-        });
-        aiResponseText = response.text || '';
-      } catch (geminiError: any) {
-        console.warn('[MaIA] Gemini API indisponível, acionando motor heurístico:', geminiError?.message);
+    // 1. Provider-Agnostic LLM Adapter (Gemini ou Adapter Futuro)
+    try {
+      const llm = getLlmProvider();
+      const generated = await llm.generateText(input.prompt, systemContext);
+      if (generated) {
+        aiResponseText = generated;
       }
+    } catch (llmError: any) {
+      console.warn('[MaIA] LLM indisponível, acionando motor heurístico:', llmError?.message);
     }
 
     // 2. Domain Expert Heuristic Fallback
     const p = (input.prompt || '').toLowerCase();
     if (!aiResponseText) {
       if (p.includes('viabilidade') || p.includes('cep') || p.includes('cto')) {
-        const check = maiaPolicyEngine.evaluateToolExecution('consultar_viabilidade', actor.instanceId);
-        if (check.permitido) {
-          toolActionExecuted = {
-            name: 'consultar_viabilidade',
-            cep: targetContato?.cep || '13024-000',
-            numero: targetContato?.numero || '450',
-            resultado: 'ESTIMATIVA_DEMO_VIAVEL'
-          };
-          aiResponseText = `[MaIA Telecom] Analisei a região informada. [AVISO: Modo Estimativa Sandbox] A CTO teórica encontra-se a cerca de 45 metros. Portas disponíveis: 4. Recomendo avançar com a apresentação do plano Fibra 600 Mega Gamer.`;
+        try {
+          const execResult = await executeMaiaTool({
+            toolName: 'consultar_viabilidade',
+            params: {
+              cep: targetContato?.cep || '13024-000',
+              numero: targetContato?.numero || '450',
+              contatoId: input.contatoId
+            },
+            actor
+          });
+
+          if (execResult.status === 'PENDING_APPROVAL') {
+            pendingApprovalId = execResult.approvalId;
+            aiResponseText = `[MaIA Governança] A consulta de viabilidade requer aprovação humana prévia (Solicitação: ${execResult.approvalId}).`;
+          } else {
+            toolActionExecuted = { name: 'consultar_viabilidade', ...execResult.data };
+            aiResponseText = `[MaIA Telecom] Analisei a região informada. [AVISO: Modo Estimativa Sandbox] A CTO teórica encontra-se a cerca de 45 metros. Portas disponíveis: 4. Recomendo avançar com a apresentação do plano Fibra 600 Mega Gamer.`;
+          }
+        } catch (err: any) {
+          aiResponseText = `[MaIA Erro de Governança] ${err.message}`;
         }
       } else if (p.includes('proposta') || p.includes('plano') || p.includes('preço')) {
-        const check = maiaPolicyEngine.evaluateToolExecution('recomendar_plano', actor.instanceId);
-        if (check.permitido) {
-          toolActionExecuted = {
-            name: 'recomendar_plano',
-            plano: 'Fibra Gamer Turbo 600 Mega',
-            mrrEstimado: 119.90
-          };
-          aiResponseText = `[MaIA Telecom] Com base no catálogo oficial da sua instância, a melhor opção é o **Fibra Gamer Turbo 600 Mega** (R$ 119,90/mês), com Wi-Fi 6 de alta performance.`;
+        try {
+          const execResult = await executeMaiaTool({
+            toolName: 'recomendar_plano',
+            params: {},
+            actor
+          });
+
+          if (execResult.status === 'PENDING_APPROVAL') {
+            pendingApprovalId = execResult.approvalId;
+            aiResponseText = `[MaIA Governança] A recomendação de plano requer aprovação humana prévia (Solicitação: ${execResult.approvalId}).`;
+          } else {
+            toolActionExecuted = { name: 'recomendar_plano', ...execResult.data };
+            aiResponseText = `[MaIA Telecom] Com base no catálogo oficial da sua instância, a melhor opção é o **Fibra Gamer Turbo 600 Mega** (R$ 119,90/mês), com Wi-Fi 6 de alta performance.`;
+          }
+        } catch (err: any) {
+          aiResponseText = `[MaIA Erro de Governança] ${err.message}`;
         }
       } else if (p.includes('qualificar') || p.includes('score')) {
-        const check = maiaPolicyEngine.evaluateToolExecution('qualificar_lead', actor.instanceId);
-        if (check.permitido) {
-          const tool = MAIA_TOOL_REGISTRY.qualificar_lead;
-          if (input.contatoId) {
-            try {
-              const qualifResult = await tool.execute({ contatoId: input.contatoId }, actor);
-              toolActionExecuted = { name: 'qualificar_lead', ...qualifResult };
+        if (input.contatoId) {
+          try {
+            const execResult = await executeMaiaTool({
+              toolName: 'qualificar_lead',
+              params: { contatoId: input.contatoId },
+              actor
+            });
+
+            if (execResult.status === 'PENDING_APPROVAL') {
+              pendingApprovalId = execResult.approvalId;
+              aiResponseText = `[MaIA Governança] A qualificação do lead requer aprovação humana prévia (Solicitação: ${execResult.approvalId}).`;
+            } else {
+              toolActionExecuted = { name: 'qualificar_lead', ...execResult.data };
               aiResponseText = `[MaIA Telecom] Lead qualificado com **Score 92/100** (Alta Prioridade). Interesse identificado em portabilidade imediata sem restrições.`;
-            } catch (err: any) {
-              aiResponseText = `[MaIA Erro de Governança] Falha na qualificação: ${err.message}`;
             }
-          } else {
-            aiResponseText = `[MaIA Telecom] Nenhum contato selecionado nesta instância para qualificação.`;
+          } catch (err: any) {
+            aiResponseText = `[MaIA Erro de Governança] Falha na qualificação: ${err.message}`;
           }
+        } else {
+          aiResponseText = `[MaIA Telecom] Nenhum contato selecionado nesta instância para qualificação.`;
+        }
+      } else if (p.includes('desconto')) {
+        try {
+          const execResult = await executeMaiaTool({
+            toolName: 'aplicar_desconto_excecao',
+            params: { dealId: input.dealId || 'deal_demo' },
+            actor
+          });
+
+          if (execResult.status === 'PENDING_APPROVAL') {
+            pendingApprovalId = execResult.approvalId;
+            aiResponseText = `[MaIA Governança] A aplicação de desconto requer aprovação humana prévia do supervisor (Solicitação: ${execResult.approvalId}).`;
+          } else {
+            toolActionExecuted = { name: 'aplicar_desconto_excecao', ...execResult.data };
+            aiResponseText = `[MaIA Telecom] Desconto de exceção aplicado com sucesso.`;
+          }
+        } catch (err: any) {
+          aiResponseText = `[MaIA Erro de Governança] ${err.message}`;
         }
       } else {
         aiResponseText = `[MaIA v3.8] Solicitação recebida sob governança N${nivel}. Dados da operadora ${instance.nomeFantasia} verificados.`;
@@ -138,15 +178,16 @@ ${targetDeal ? `Negócio em foco: ${targetDeal.titulo}, Etapa: ${targetDeal.etap
       action: 'MAIA_INTERACTION_PROCESSED',
       entityType: 'MAIA_TOOL',
       entityId: input.dealId || input.contatoId || 'GENERAL',
-      details: `Prompt processado: "${input.prompt.substring(0, 70)}...". Ferramenta: ${toolActionExecuted?.name || 'CONVERSACIONAL'}`,
+      details: `Prompt processado: "${input.prompt.substring(0, 70)}...". Ferramenta: ${toolActionExecuted?.name || (pendingApprovalId ? 'PENDING_APPROVAL' : 'CONVERSACIONAL')}`,
       isMaiaAction: true,
-      dadosPosteriores: { toolActionExecuted, nivelAutonomia: nivel }
+      dadosPosteriores: { toolActionExecuted, pendingApprovalId, nivelAutonomia: nivel }
     });
 
     return {
       resposta: aiResponseText,
       toolExecutada: toolActionExecuted?.name,
       parametrosTool: toolActionExecuted,
+      approvalId: pendingApprovalId,
       auditId: auditLog.id,
       nivelAutonomia: nivel
     };
