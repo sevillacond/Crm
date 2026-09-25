@@ -18,7 +18,12 @@ export class WhatsAppAdapter implements IWhatsAppAdapter {
   }
 
   verificarWebhookToken(mode: string, token: string, challenge: string): string | null {
-    if (mode === 'subscribe' && token === (this.verifyToken || 'enlace_meta_verify_token')) {
+    if (process.env.NODE_ENV === 'production' && (!this.verifyToken || this.verifyToken.includes('CHANGE_ME'))) {
+      console.error('[WhatsAppAdapter] WHATSAPP_VERIFY_TOKEN não configurado em produção. Verificação rejeitada.');
+      return null;
+    }
+    const expectedToken = this.verifyToken || 'enlace_meta_verify_token';
+    if (mode === 'subscribe' && token === expectedToken) {
       return challenge;
     }
     return null;

@@ -36,7 +36,7 @@ router.post('/chamadas', authMiddleware, async (req: Request, res: Response) => 
       iniciadaEm: new Date(Date.now() - (duracaoSegundos || 0) * 1000).toISOString(),
       finalizadaEm: new Date().toISOString(),
       notasOperador,
-      gravacaoUrl: 'https://telecom.enlace.local/recordings/call-simulada.mp3'
+      gravacaoUrl: req.body.gravacaoUrl || null
     }, actor);
 
     return res.status(201).json({ chamada });

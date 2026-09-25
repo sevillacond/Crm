@@ -12,6 +12,7 @@ import { maiaRoutes } from './maia.routes.ts';
 import { sgpRoutes } from './sgp.routes.ts';
 import { telefoniaRoutes } from './telefonia.routes.ts';
 import { cobrancaRoutes } from './cobranca.routes.ts';
+import { whatsappRoutes } from './whatsapp.routes.ts';
 
 const router = Router();
 
@@ -28,5 +29,6 @@ router.use('/maia', maiaRoutes);
 router.use('/sgp', sgpRoutes);
 router.use('/telefonia', telefoniaRoutes);
 router.use('/cobranca', cobrancaRoutes);
+router.use('/whatsapp', whatsappRoutes);
 
 export const apiRoutes = router;

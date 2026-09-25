@@ -14,6 +14,8 @@ export interface AppliedMigration {
   applied_at: Date;
 }
 
+const MIGRATION_ADVISORY_LOCK_ID = 827361928;
+
 export async function runMigrations(): Promise<boolean> {
   const isConnected = await checkDatabaseConnection();
   if (!isConnected) {
@@ -22,7 +24,12 @@ export async function runMigrations(): Promise<boolean> {
   }
 
   const client = await pool.connect();
+  let lockAcquired = false;
   try {
+    // P1 Hardening: Trava distribuída de migração contra execução simultânea por múltiplos contêineres/workers
+    await client.query(`SELECT pg_advisory_lock($1);`, [MIGRATION_ADVISORY_LOCK_ID]);
+    lockAcquired = true;
+    console.log('[MIGRATE] Lock consultivo (pg_advisory_lock) adquirido com sucesso.');
     console.log('[MIGRATE] Inicializando engine de controle de migrações...');
 
     // 1. Criar tabela de controle de migrações se não existir
@@ -101,6 +108,14 @@ export async function runMigrations(): Promise<boolean> {
     console.error('[MIGRATE] Erro no pipeline de migrações:', error.message);
     throw error;
   } finally {
+    if (lockAcquired) {
+      try {
+        await client.query(`SELECT pg_advisory_unlock($1);`, [MIGRATION_ADVISORY_LOCK_ID]);
+        console.log('[MIGRATE] Lock consultivo (pg_advisory_unlock) liberado.');
+      } catch (unlockErr: any) {
+        console.warn('[MIGRATE] Aviso ao liberar pg_advisory_unlock:', unlockErr.message);
+      }
+    }
     client.release();
   }
 }

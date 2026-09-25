@@ -1457,6 +1457,85 @@ async function main() {
     assert.strictEqual(contratos.length, 0, 'Instância limpa não deve conter contratos fabricados');
   });
 
+  // ==========================================
+  // SUÍTE 11: FASE 4 A 14 — ZERO FAKE SUCCESS, WEBHOOKS E IDEMPOTÊNCIA
+  // ==========================================
+
+  await runTest('11.1 Webhook Financeiro: Payload fake { pix: { pago: true } } é rejeitado por violação de schema', async () => {
+    const { paymentsAdapter } = await import('../src/integrations/payments/payments.adapter.ts');
+    const resultado = await paymentsAdapter.processWebhook({ pix: { pago: true } });
+    assert.strictEqual(resultado.liquidado, false, 'Deve rejeitar schema sem array de itens homologado');
+    assert(resultado.erro?.includes('Schema inválido'), 'Deve acusar schema inválido');
+  });
+
+  await runTest('11.2 Webhook Financeiro: Proteção contra Replay Attack rejeita evento fora da janela de 5 minutos', async () => {
+    const { paymentsAdapter } = await import('../src/integrations/payments/payments.adapter.ts');
+    const timestampAntigo = new Date(Date.now() - 600000).toISOString(); // 10 minutos atrás
+    const resultado = await paymentsAdapter.processWebhook(
+      { pix: [{ txid: 'tx_teste_replay', valor: 100 }] },
+      undefined,
+      timestampAntigo
+    );
+    assert.strictEqual(resultado.liquidado, false);
+    assert(resultado.erro?.includes('Replay Attack'), 'Deve detectar tentativa de replay de evento antigo');
+  });
+
+  await runTest('11.3 Zero Fake Success: cancelCharge e refundCharge proíbem sucesso sem gateway real conectado', async () => {
+    const { paymentsAdapter } = await import('../src/integrations/payments/payments.adapter.ts');
+    const cancelRes = await paymentsAdapter.cancelCharge('tx_teste_sem_gateway');
+    assert.strictEqual(cancelRes.cancelado, false, 'cancelCharge não pode declarar cancelado: true sem gateway');
+    assert(cancelRes.motivo?.includes('não configurado'), 'Deve informar motivo explícito');
+
+    const refundRes = await paymentsAdapter.refundCharge('tx_teste_sem_gateway', 50);
+    assert.strictEqual(refundRes.estornado, false, 'refundCharge não pode declarar estornado: true sem gateway');
+  });
+
+  await runTest('11.4 Telefonia Persistência: gravação simulada é sanitizada para null (Zero fake URL)', async () => {
+    const { telefoniaService } = await import('../src/modules/telefonia/telefonia.service.ts');
+    const actor = createActorContext({
+      id: 'usr-admin-telecom',
+      name: 'Admin Telecom',
+      email: 'admin@telecom.net.br',
+      role: 'ADMIN',
+      avatar: '',
+      department: 'NOC',
+      status: 'ONLINE',
+      instanceId: 'inst-dev-local-001'
+    });
+
+    const chamada = await telefoniaService.registrarChamada({
+      ramalOrigem: '1000',
+      numeroDestino: '(11) 99999-8888',
+      direcao: 'SAINTE',
+      status: 'ATENDIDA',
+      duracaoSegundos: 45,
+      iniciadaEm: new Date().toISOString(),
+      gravacaoUrl: 'https://telecom.enlace.local/recordings/call-simulada.mp3'
+    }, actor);
+
+    assert.strictEqual(chamada.gravacaoUrl, null, 'URL de gravação fictícia simulada deve ser sanitizada para null');
+  });
+
+  await runTest('11.5 HubSoft STUB: Adaptador em estágio STUB nunca retorna fake ok: true ou latência artificial', async () => {
+    const { HubSoftAdapter } = await import('../src/integrations/sgp/sgp.adapter.ts');
+    const hubsoft = new HubSoftAdapter();
+    const health = await hubsoft.healthCheck();
+    assert.strictEqual(health.ok, false, 'HubSoft STUB não pode retornar fake ok: true');
+    assert.strictEqual(hubsoft.status, 'STUB', 'Deve classificar adapter como STUB');
+    assert.strictEqual((health as any).latencyMs, undefined, 'Não deve retornar latência fictícia inventada');
+  });
+
+  await runTest('11.6 Cobrança: Idempotência de webhook evita liquidação duplicada de evento já gravado', async () => {
+    const { cobrancaRepository } = await import('../src/modules/cobranca/cobranca.repository.ts');
+    const eventId = `test_evt_${Date.now()}`;
+    const alreadyBefore = await cobrancaRepository.isWebhookEventProcessed(eventId);
+    assert.strictEqual(alreadyBefore, false);
+
+    await cobrancaRepository.recordWebhookEvent('ENLACE_PAY', eventId, { txid: 'tx_123', valor: 99.9 });
+    const alreadyAfter = await cobrancaRepository.isWebhookEventProcessed(eventId);
+    assert.strictEqual(alreadyAfter, true, 'Deve confirmar evento idempotente como já processado');
+  });
+
   console.log('\n------------------------------------------------------');
   console.log(`Resultado Final: ${passedCount} passou, ${failedCount} falhou.`);
   console.log('------------------------------------------------------\n');

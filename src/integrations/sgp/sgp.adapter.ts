@@ -13,9 +13,9 @@ export class IxcAdapter implements ISgpAdapter {
     return !!(this.endpoint && this.token && !this.token.includes('CHANGE_ME'));
   }
 
-  async healthCheck(): Promise<{ ok: boolean; latencyMs?: number; message?: string }> {
+  async healthCheck(): Promise<{ ok: boolean; latencyMs?: number; message?: string; statusIntegracao: string }> {
     if (!this.isConfigurado()) {
-      return { ok: false, message: 'IXC Soft não configurado nesta instância.' };
+      return { ok: false, statusIntegracao: 'NOT_CONFIGURED', message: 'IXC Soft não configurado nesta instância.' };
     }
     const start = Date.now();
     try {
@@ -23,9 +23,9 @@ export class IxcAdapter implements ISgpAdapter {
         method: 'GET',
         headers: { Authorization: `Basic ${Buffer.from(this.token || '').toString('base64')}` }
       });
-      return { ok: res.ok, latencyMs: Date.now() - start };
+      return { ok: res.ok, statusIntegracao: res.ok ? 'CONNECTED' : 'ERROR', latencyMs: Date.now() - start };
     } catch (err: any) {
-      return { ok: false, message: err.message, latencyMs: Date.now() - start };
+      return { ok: false, statusIntegracao: 'ERROR', message: err.message, latencyMs: Date.now() - start };
     }
   }
 
@@ -34,7 +34,7 @@ export class IxcAdapter implements ISgpAdapter {
       return {
         cpfCnpj,
         nome: 'Cliente Não Integrado',
-        statusConexao: 'NAO_ENCONTRADO'
+        statusConexao: 'NOT_CONFIGURED'
       };
     }
     try {
@@ -45,32 +45,59 @@ export class IxcAdapter implements ISgpAdapter {
         signal: controller.signal
       });
       clearTimeout(timeout);
-      if (!res.ok) throw new Error(`IXC HTTP ${res.status}`);
+
+      if (res.status === 401 || res.status === 403) {
+        return { cpfCnpj, nome: 'Autenticação IXC Inválida', statusConexao: 'UNAUTHORIZED' };
+      }
+      if (res.status === 404) {
+        return { cpfCnpj, nome: 'Não Encontrado', statusConexao: 'NAO_ENCONTRADO' };
+      }
+      if (!res.ok) {
+        return { cpfCnpj, nome: `Erro IXC (${res.status})`, statusConexao: 'NETWORK_ERROR' };
+      }
+
       return (await res.json()) as SgpClienteSync;
     } catch (err: any) {
+      const isTimeout = err.name === 'AbortError';
       console.warn(`[IxcAdapter] Falha na consulta IXC:`, err.message);
       return {
         cpfCnpj,
-        nome: 'Consulta Indisponível',
-        statusConexao: 'NAO_ENCONTRADO'
+        nome: isTimeout ? 'Timeout na consulta IXC' : 'Erro de Conexão IXC',
+        statusConexao: isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR'
       };
     }
   }
 
-  async desbloquearConfianca(loginPppoe: string): Promise<{ sucesso: boolean; mensagem: string }> {
+  async desbloquearConfianca(loginPppoe: string): Promise<{ sucesso: boolean; mensagem: string; statusIntegracao: string }> {
     if (!this.isConfigurado()) {
-      return { sucesso: false, mensagem: 'Integração com IXC Soft pendente de configuração.' };
+      return { sucesso: false, statusIntegracao: 'NOT_CONFIGURED', mensagem: 'Integração com IXC Soft pendente de configuração.' };
     }
-    return { sucesso: true, mensagem: `Desbloqueio de 48h efetuado no IXC para login ${loginPppoe}.` };
+    try {
+      const res = await fetch(`${this.endpoint}/radusuarios_desbloqueio`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${Buffer.from(this.token || '').toString('base64')}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ login: loginPppoe })
+      });
+      if (res.ok) {
+        return { sucesso: true, statusIntegracao: 'CONNECTED', mensagem: `Desbloqueio de 48h efetuado no IXC para login ${loginPppoe}.` };
+      }
+      return { sucesso: false, statusIntegracao: 'ERROR', mensagem: `IXC rejeitou desbloqueio: HTTP ${res.status}` };
+    } catch (err: any) {
+      return { sucesso: false, statusIntegracao: 'ERROR', mensagem: `Falha de rede ao contatar IXC: ${err.message}` };
+    }
   }
 }
 
 // -------------------------------------------------------------
-// ADAPTER HUBSOFT (API REST v1)
+// ADAPTER HUBSOFT (API REST v1 - Classificação Estrita: STUB)
+// Zero Fake Success: Elimina qualquer retorno fake de "ok: true" ou "latencyMs: 15"
 // -------------------------------------------------------------
 export class HubSoftAdapter implements ISgpAdapter {
   readonly nome = 'HubSoft ERP';
-  readonly status = 'ADAPTER_PARTIAL' as const;
+  readonly status = 'STUB' as const;
   private endpoint = process.env.HUBSOFT_API_ENDPOINT || process.env.SGP_API_ENDPOINT;
   private token = process.env.HUBSOFT_API_TOKEN || process.env.SGP_API_TOKEN;
 
@@ -78,11 +105,16 @@ export class HubSoftAdapter implements ISgpAdapter {
     return !!(this.endpoint && this.token && !this.token.includes('CHANGE_ME'));
   }
 
-  async healthCheck(): Promise<{ ok: boolean; latencyMs?: number; message?: string }> {
+  // P0 Zero Fake Success: Nunca retornar fake ok: true ou latência forjada
+  async healthCheck(): Promise<{ ok: boolean; latencyMs?: number; message?: string; statusIntegracao: string }> {
     if (!this.isConfigurado()) {
-      return { ok: false, message: 'HubSoft não configurado.' };
+      return { ok: false, statusIntegracao: 'NOT_CONFIGURED', message: 'HubSoft não configurado nesta instância.' };
     }
-    return { ok: true, latencyMs: 15 };
+    return {
+      ok: false,
+      statusIntegracao: 'STUB',
+      message: 'HubSoft ERP: Adaptador em estágio STUB (homologação de endpoints reais pendente). Não conectado.'
+    };
   }
 
   async consultarCliente(cpfCnpj: string): Promise<SgpClienteSync> {
@@ -90,21 +122,22 @@ export class HubSoftAdapter implements ISgpAdapter {
       return {
         cpfCnpj,
         nome: 'Cliente Não Integrado',
-        statusConexao: 'NAO_ENCONTRADO'
+        statusConexao: 'NOT_CONFIGURED'
       };
     }
     return {
       cpfCnpj,
-      nome: 'Consulta HubSoft',
-      statusConexao: 'NAO_ENCONTRADO'
+      nome: 'HubSoft (Adaptador STUB não homologado)',
+      statusConexao: 'NOT_CONFIGURED'
     };
   }
 
-  async desbloquearConfianca(loginPppoe: string): Promise<{ sucesso: boolean; mensagem: string }> {
-    if (!this.isConfigurado()) {
-      return { sucesso: false, mensagem: 'Integração com HubSoft pendente de configuração.' };
-    }
-    return { sucesso: true, mensagem: `Desbloqueio de confiança solicitado ao HubSoft para ${loginPppoe}.` };
+  async desbloquearConfianca(loginPppoe: string): Promise<{ sucesso: boolean; mensagem: string; statusIntegracao: string }> {
+    return {
+      sucesso: false,
+      statusIntegracao: 'STUB',
+      mensagem: 'Desbloqueio em confiança indisponível: Adaptador HubSoft pendente de homologação com API real.'
+    };
   }
 }
 
@@ -113,7 +146,6 @@ export class HubSoftAdapter implements ISgpAdapter {
 // -------------------------------------------------------------
 export class SgpAdapter implements ISgpAdapter {
   readonly nome = 'SGP / ERP de Provedor';
-  readonly status = 'ADAPTER_PARTIAL' as const;
   private activeAdapter: ISgpAdapter;
 
   constructor() {
@@ -125,11 +157,15 @@ export class SgpAdapter implements ISgpAdapter {
     }
   }
 
+  get status(): 'MOCK' | 'STUB' | 'ADAPTER_PARTIAL' | 'CONNECTED' | 'REAL' | 'NOT_CONFIGURED' {
+    return this.activeAdapter.status as any;
+  }
+
   isConfigurado(): boolean {
     return this.activeAdapter.isConfigurado();
   }
 
-  async healthCheck(): Promise<{ ok: boolean; latencyMs?: number; message?: string }> {
+  async healthCheck(): Promise<{ ok: boolean; latencyMs?: number; message?: string; statusIntegracao?: string }> {
     return this.activeAdapter.healthCheck();
   }
 
@@ -137,7 +173,7 @@ export class SgpAdapter implements ISgpAdapter {
     return this.activeAdapter.consultarCliente(cpfCnpj);
   }
 
-  async desbloquearConfianca(loginPppoe: string): Promise<{ sucesso: boolean; mensagem: string }> {
+  async desbloquearConfianca(loginPppoe: string): Promise<{ sucesso: boolean; mensagem: string; statusIntegracao?: string }> {
     return this.activeAdapter.desbloquearConfianca(loginPppoe);
   }
 }

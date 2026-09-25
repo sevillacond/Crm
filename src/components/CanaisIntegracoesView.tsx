@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   MessageSquare, 
   Radio, 
@@ -20,6 +20,14 @@ import { notify } from '../utils/notify';
 export const CanaisIntegracoesView: React.FC = () => {
   const [activeSubTab, setActiveSubTab] = useState<'WHATSAPP' | 'WEBCHAT' | 'INTEGRACOES'>('WHATSAPP');
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
+  const [integrationHealth, setIntegrationHealth] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    fetch('/health/integrations')
+      .then(res => res.json())
+      .then(data => setIntegrationHealth(data))
+      .catch(() => {});
+  }, []);
 
   // WebChat widget customization
   const [widgetPrimaryColor, setWidgetPrimaryColor] = useState<string>('#0891b2');
@@ -358,46 +366,46 @@ export const CanaisIntegracoesView: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {[
             {
-              nome: 'SGP / Provedor',
-              desc: 'Integração de contratos, planos e cadastro de assinantes FTTH.',
-              status: 'CONECTADO',
-              statusColor: 'bg-emerald-950 text-emerald-300 border-emerald-800',
+              nome: 'SGP (IXC Soft)',
+              desc: 'Integração de contratos, planos e cadastro de assinantes FTTH via Webservice.',
+              status: integrationHealth.sgp === 'CONNECTED' ? 'CONECTADO' : (integrationHealth.sgp === 'ADAPTER_PARTIAL' ? 'ADAPTER PARCIAL' : 'NÃO CONFIGURADO'),
+              statusColor: integrationHealth.sgp === 'CONNECTED' ? 'bg-emerald-950 text-emerald-300 border-emerald-800' : 'bg-amber-950 text-amber-300 border-amber-800',
               tipo: 'Adapter REST API'
             },
             {
-              nome: 'IXC Soft',
-              desc: 'Sincronização bidirecional de ordens de serviço, clientes e faturas.',
-              status: 'PRONTO PARA CONFIGURAR',
-              statusColor: 'bg-slate-800 text-slate-300 border-slate-700',
-              tipo: 'Adapter Webhook'
-            },
-            {
-              nome: 'HubSoft',
+              nome: 'HubSoft ERP',
               desc: 'Consulta de situação de sinal de fibra óptica, desbloqueio de confiança e OLT.',
-              status: 'PRONTO PARA CONFIGURAR',
+              status: 'STUB (NÃO HOMOLOGADO)',
               statusColor: 'bg-slate-800 text-slate-300 border-slate-700',
-              tipo: 'Adapter REST'
+              tipo: 'Adapter STUB'
             },
             {
               nome: 'Enlace-PBX (Asterisk SIP)',
               desc: 'Infraestrutura de voz separada para chamadas WebPhone WebRTC.',
-              status: 'CONECTADO',
-              statusColor: 'bg-indigo-950 text-indigo-300 border-indigo-800',
+              status: integrationHealth.asterisk === 'CONNECTED' ? 'CONECTADO' : (integrationHealth.asterisk === 'ADAPTER_PARTIAL' ? 'ADAPTER PARCIAL (WSS)' : 'MOCK / SIMULADO'),
+              statusColor: integrationHealth.asterisk === 'CONNECTED' ? 'bg-emerald-950 text-emerald-300 border-emerald-800' : 'bg-indigo-950 text-indigo-300 border-indigo-800',
               tipo: 'SIP WebSocket / WebRTC'
             },
             {
-              nome: 'Cobrança-API (Banco / FinTech)',
-              desc: 'Geração de boletos e Pix dinâmico instantâneo com conciliação automática.',
-              status: 'CONECTADO',
-              statusColor: 'bg-emerald-950 text-emerald-300 border-emerald-800',
+              nome: 'Enlace-Pay (Pix Bancário)',
+              desc: 'Geração de Pix dinâmico instantâneo e conciliação via webhook assinado HMAC-SHA256.',
+              status: integrationHealth.payments === 'PRODUCTION' ? 'PRODUÇÃO' : (integrationHealth.payments === 'CONNECTED' ? 'CONECTADO' : 'MOCK / SANDBOX'),
+              statusColor: integrationHealth.payments === 'PRODUCTION' || integrationHealth.payments === 'CONNECTED' ? 'bg-emerald-950 text-emerald-300 border-emerald-800' : 'bg-blue-950 text-blue-300 border-blue-800',
               tipo: 'API Bancária'
             },
             {
-              nome: 'Enlace ERP',
-              desc: 'Camada de comunicação para emissão de notas de comunicação 21/22.',
-              status: 'HOMOLOGADO',
-              statusColor: 'bg-blue-950 text-blue-300 border-blue-800',
-              tipo: 'REST Gateway'
+              nome: 'Meta WhatsApp Cloud API',
+              desc: 'Canal oficial Meta Cloud API com webhooks verificados e modelos HSM.',
+              status: integrationHealth.whatsapp === 'CONNECTED' ? 'CONECTADO' : (integrationHealth.whatsapp === 'ADAPTER_PARTIAL' ? 'ADAPTER PARCIAL' : 'NÃO CONFIGURADO'),
+              statusColor: integrationHealth.whatsapp === 'CONNECTED' ? 'bg-emerald-950 text-emerald-300 border-emerald-800' : 'bg-amber-950 text-amber-300 border-amber-800',
+              tipo: 'Meta Graph API'
+            },
+            {
+              nome: 'Google Gemini 2.5 Flash',
+              desc: 'Motor de inteligência artificial com Structured Tool Calling e isolamento de instância.',
+              status: integrationHealth.gemini === 'CONNECTED' ? 'OPERACIONAL' : 'NÃO CONFIGURADO',
+              statusColor: integrationHealth.gemini === 'CONNECTED' ? 'bg-purple-950 text-purple-300 border-purple-800' : 'bg-slate-800 text-slate-300 border-slate-700',
+              tipo: '@google/genai SDK'
             }
           ].map(adapter => (
             <div
@@ -417,10 +425,10 @@ export const CanaisIntegracoesView: React.FC = () => {
               <div className="pt-2 border-t border-slate-800 flex justify-between items-center text-xs">
                 <span className="text-[11px] font-mono text-slate-500">Credenciais no Backend</span>
                 <button
-                  onClick={() => notify(`Configurações e credenciais de ${adapter.nome} carregadas. Conexão validada via RPC.`, 'success')}
+                  onClick={() => notify(`Adapter ${adapter.nome}: status operacional atual é ${adapter.status}. Configuração gerenciada via variáveis de ambiente da instância.`, 'info')}
                   className="text-cyan-400 hover:text-cyan-300 font-semibold cursor-pointer"
                 >
-                  Gerenciar Adapter &rarr;
+                  Status do Adapter &rarr;
                 </button>
               </div>
             </div>

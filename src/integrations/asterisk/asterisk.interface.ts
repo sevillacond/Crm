@@ -1,15 +1,23 @@
 // =============================================================================
-// ENLACE TELECOM CRM — ASTERISK / ENLACE-PBX INTERFACE (P0.21)
-// Classificação: Separação estrita entre MOCK e REAL
+// ENLACE TELECOM CRM — ASTERISK / ENLACE-PBX INTERFACE (P0/P1)
+// Classificação estrita: Zero Fake Success em Telefonia IP
 // =============================================================================
 
-export type AsteriskAdapterStatus = 'MOCK' | 'ADAPTER_PARTIAL' | 'REAL';
+export type AsteriskAdapterStatus =
+  | 'NOT_CONFIGURED'
+  | 'MOCK'
+  | 'STUB'
+  | 'ADAPTER_PARTIAL'
+  | 'CONNECTED'
+  | 'PRODUCTION'
+  | 'ERROR';
 
 export interface WebRtcConfig {
   wssUrl: string;
   ramal: string;
   stunServer: string;
   turnServer?: string;
+  statusIntegracao: AsteriskAdapterStatus;
 }
 
 export interface CallRecord {
@@ -26,6 +34,12 @@ export interface IAsteriskAdapter {
   readonly status: AsteriskAdapterStatus;
   isConfigurado(): boolean;
   obterConfigWebRtc(ramal: string): WebRtcConfig;
-  iniciarChamada(origemRamal: string, destinoNumero: string): Promise<{ chamadaIniciada: boolean; callId?: string; erro?: string }>;
-  encerrarChamada?(callId: string): Promise<{ sucesso: boolean }>;
+  iniciarChamada(origemRamal: string, destinoNumero: string): Promise<{
+    chamadaIniciada: boolean;
+    callId?: string;
+    statusIntegracao: AsteriskAdapterStatus;
+    erro?: string;
+    aviso?: string;
+  }>;
+  encerrarChamada?(callId: string): Promise<{ sucesso: boolean; statusIntegracao: AsteriskAdapterStatus }>;
 }
