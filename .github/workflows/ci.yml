@@ -45,26 +45,14 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Setup Node.js (for tool compatibility)
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
       - name: Install Dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Typecheck
-        run: npm run typecheck
+        run: bun run typecheck
 
       - name: Lint
-        run: npm run lint
-
-      - name: Run Database Migrations
-        env:
-          NODE_ENV: test
-          DATABASE_URL: postgresql://enlace_test_user:enlace_test_password_2026@localhost:5432/enlace_test_db?sslmode=disable
-        run: npm run db:migrate
+        run: bun run lint
 
       - name: Run Test Suite
         env:
@@ -74,10 +62,16 @@ jobs:
           JWT_SECRET: ci_test_jwt_secret_minimum_32_characters_long_hash
           TEST_ADMIN_EMAIL: admin@enlace.net.br
           TEST_ADMIN_PASSWORD: Enlace@2026!
-        run: npm test
+        run: bun test
+
+      - name: Migration Validation
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://enlace_test_user:enlace_test_password_2026@localhost:5432/enlace_test_db?sslmode=disable
+        run: bun run db:migrate
 
       - name: Build Production Assets (Vite SPA)
-        run: npm run build
+        run: bun run build
 
       - name: Verify Docker Multi-Stage Build
         run: docker build -t enlace-telecom-crm:ci-test .
