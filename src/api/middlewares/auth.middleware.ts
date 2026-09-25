@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from '../../modules/auth/auth.service.ts';
 import { usersRepository } from '../../modules/users/users.repository.ts';
+import { sessionsRepository } from '../../modules/auth/sessions.repository.ts';
 import { User } from '../../types/index.ts';
 import { ActorContext, createActorContext } from '../../modules/auth/actorContext.ts';
 
@@ -44,6 +45,19 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
 
   try {
     const payload = await authService.verifyToken(token);
+
+    // P0.9: Validar se a sessão não foi revogada no logout ou expirada
+    const activeSession = await sessionsRepository.findValidSession(token);
+    if (!activeSession) {
+      res.status(401).json({
+        error: {
+          code: 'SESSION_REVOKED_OR_EXPIRED',
+          message: 'Sessão de usuário inexistente, revogada ou expirada.'
+        }
+      });
+      return;
+    }
+
     const dbUser = await usersRepository.getById(payload.sub);
 
     if (!dbUser) {
@@ -69,11 +83,11 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
 
     const effectiveInstanceId = dbUser.instanceId;
 
-    // Consolidated ActorContext (Section 4)
+    // Consolidated ActorContext (Section 4 & P0.19 Trusted IP)
     const actor = createActorContext(
       dbUser,
       {
-        ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress,
+        ipAddress: req.ip || req.socket.remoteAddress || '127.0.0.1',
         userAgent: req.headers['user-agent'] as string,
         requestId: req.requestId
       }

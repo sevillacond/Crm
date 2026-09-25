@@ -1,7 +1,7 @@
 import { User, InstanceConfig, Plano, Contato, Deal, AuditLog, OrdemServico } from '../types';
 
 export const INITIAL_INSTANCE: InstanceConfig = {
-  instanceId: 'inst_enlace_sp_001',
+  instanceId: 'inst-enlace-fibra-001',
   cnpj: '42.109.876/0001-55',
   razaoSocial: 'Enlace Telecomunicações e Conectividade Ltda.',
   nomeFantasia: 'Enlace Fibra Telecom',
@@ -19,7 +19,7 @@ export const INITIAL_INSTANCE: InstanceConfig = {
 export const INITIAL_USERS: User[] = [
   {
     id: 'usr_admin',
-    instanceId: 'inst_enlace_sp_001',
+    instanceId: 'inst-enlace-fibra-001',
     name: 'Roberto Albuquerque',
     email: 'roberto@enlacefibra.com.br',
     role: 'ADMIN',
@@ -29,7 +29,7 @@ export const INITIAL_USERS: User[] = [
   },
   {
     id: 'usr_supervisor',
-    instanceId: 'inst_enlace_sp_001',
+    instanceId: 'inst-enlace-fibra-001',
     name: 'Camila Siqueira',
     email: 'camila.vendas@enlacefibra.com.br',
     role: 'SUPERVISOR',
@@ -39,7 +39,7 @@ export const INITIAL_USERS: User[] = [
   },
   {
     id: 'usr_atendente_1',
-    instanceId: 'inst_enlace_sp_001',
+    instanceId: 'inst-enlace-fibra-001',
     name: 'Lucas Mendes',
     email: 'lucas.sdr@enlacefibra.com.br',
     role: 'ATENDENTE',
@@ -49,7 +49,7 @@ export const INITIAL_USERS: User[] = [
   },
   {
     id: 'usr_atendente_2',
-    instanceId: 'inst_enlace_sp_001',
+    instanceId: 'inst-enlace-fibra-001',
     name: 'Juliana Vasconcelos',
     email: 'juliana.corp@enlacefibra.com.br',
     role: 'ATENDENTE',
@@ -59,7 +59,7 @@ export const INITIAL_USERS: User[] = [
   },
   {
     id: 'usr_tecnico',
-    instanceId: 'inst_enlace_sp_001',
+    instanceId: 'inst-enlace-fibra-001',
     name: 'Marcos Ferraz',
     email: 'marcos.campo@enlacefibra.com.br',
     role: 'TECNICO',
@@ -69,7 +69,7 @@ export const INITIAL_USERS: User[] = [
   },
   {
     id: 'usr_maia',
-    instanceId: 'inst_enlace_sp_001',
+    instanceId: 'inst-enlace-fibra-001',
     name: 'MaIA (Agente IA Enlace)',
     email: 'maia@sistema.enlace.internal',
     role: 'MAIA_AGENT',

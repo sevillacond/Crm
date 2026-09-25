@@ -1,0 +1,83 @@
+name: CI/CD Pipeline - Enlace CRM
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+jobs:
+  validate-test-build:
+    name: Typecheck, Test, Build & Docker Verification
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: enlace_test_user
+          POSTGRES_PASSWORD: enlace_test_password_2026
+          POSTGRES_DB: enlace_test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun Runtime
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node.js (for tool compatibility)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Run Database Migrations
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://enlace_test_user:enlace_test_password_2026@localhost:5432/enlace_test_db?sslmode=disable
+        run: npm run db:migrate
+
+      - name: Run Test Suite
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://enlace_test_user:enlace_test_password_2026@localhost:5432/enlace_test_db?sslmode=disable
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: ci_test_jwt_secret_minimum_32_characters_long_hash
+          TEST_ADMIN_EMAIL: admin@enlace.net.br
+          TEST_ADMIN_PASSWORD: Enlace@2026!
+        run: npm test
+
+      - name: Build Production Assets (Vite SPA)
+        run: npm run build
+
+      - name: Verify Docker Multi-Stage Build
+        run: docker build -t enlace-telecom-crm:ci-test .

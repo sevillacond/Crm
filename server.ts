@@ -25,6 +25,10 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = env.PORT;
 
+// P0.19: Configuração formal de Trust Proxy para reversos (Traefik / Nginx / Cloud Run)
+// Garante que req.ip derive do proxy reverso de borda configurado e impeça spoofing de IP
+app.set('trust proxy', 1);
+
 // -------------------------------------------------------------
 // HTTP SECURITY & PARSERS
 // -------------------------------------------------------------

@@ -20,7 +20,8 @@ export function createRateLimiter(options: {
   const store = memoryStores.get(name)!;
 
   return async (req: Request, res: Response, next: NextFunction) => {
-    const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+    // P0.19: Utiliza req.ip derivado com segurança do proxy confiável configurado
+    const ip = req.ip || req.socket.remoteAddress || '127.0.0.1';
     const key = options.keyGenerator ? options.keyGenerator(req) : `${name}:${ip}`;
     const windowSeconds = Math.ceil(windowMs / 1000);
 

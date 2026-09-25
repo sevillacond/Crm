@@ -47,6 +47,7 @@ import {
   OrdemServico
 } from './types';
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
+import { authenticatedFetch, loginWithCredentials } from './utils/api';
 
 export default function App() {
   const [instance, setInstance] = useState<InstanceConfig>(INITIAL_INSTANCE);
@@ -97,12 +98,11 @@ export default function App() {
   // Fetch initial data from server API
   const refreshData = async () => {
     try {
-      const headers = { 'x-user-id': currentUser.id };
       const [resInst, resDeals, resContatos, resAudit] = await Promise.all([
-        fetch('/api/instance', { headers }).then(r => r.ok ? r.json() : null),
-        fetch('/api/deals', { headers }).then(r => r.ok ? r.json() : null),
-        fetch('/api/contatos', { headers }).then(r => r.ok ? r.json() : null),
-        fetch('/api/audit', { headers }).then(r => r.ok ? r.json() : null)
+        authenticatedFetch('/api/instance').then(r => r.ok ? r.json() : null),
+        authenticatedFetch('/api/deals').then(r => r.ok ? r.json() : null),
+        authenticatedFetch('/api/contatos').then(r => r.ok ? r.json() : null),
+        authenticatedFetch('/api/audit').then(r => r.ok ? r.json() : null)
       ]);
 
       if (resInst) setInstance(resInst);
@@ -115,17 +115,26 @@ export default function App() {
   };
 
   useEffect(() => {
-    refreshData();
-  }, [currentUser]);
+    let isCancelled = false;
+    async function syncAuth() {
+      if (currentUser?.email) {
+        const auth = await loginWithCredentials(currentUser.email);
+        if (auth && !isCancelled) {
+          refreshData();
+        }
+      }
+    }
+    syncAuth();
+    return () => { isCancelled = true; };
+  }, [currentUser?.email]);
 
   // Handle Stage Movement in Kanban
   const handleMoveDealStage = async (dealId: string, targetStage: DealEtapa) => {
     try {
-      const res = await fetch(`/api/deals/${dealId}/stage`, {
+      const res = await authenticatedFetch(`/api/deals/${dealId}/stage`, {
         method: 'PATCH',
         headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': currentUser.id
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           etapa: targetStage,
@@ -151,13 +160,11 @@ export default function App() {
   // Handle New Lead and Initial Deal Creation
   const handleCreateNewLead = async (formData: any) => {
     try {
-      const headers = {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser.id
-      };
-      const resContato = await fetch('/api/contatos', {
+      const resContato = await authenticatedFetch('/api/contatos', {
         method: 'POST',
-        headers,
+        headers: {
+          'Content-Type': 'application/json'
+        },
         body: JSON.stringify({
           ...formData
         })
@@ -167,9 +174,11 @@ export default function App() {
       const newContato: Contato = await resContato.json();
 
       const planoEscolhido = planos.find(p => p.id === formData.planoId) || planos[0];
-      const resDeal = await fetch('/api/deals', {
+      const resDeal = await authenticatedFetch('/api/deals', {
         method: 'POST',
-        headers,
+        headers: {
+          'Content-Type': 'application/json'
+        },
         body: JSON.stringify({
           titulo: `${planoEscolhido.nome} - ${newContato.nome}`,
           contatoId: newContato.id,

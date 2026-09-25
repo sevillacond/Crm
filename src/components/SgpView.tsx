@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { SgpClienteStatus, User as UserType } from '../types';
 import { notify } from '../utils/notify';
+import { authenticatedFetch } from '../utils/api';
 
 export const SgpView: React.FC<{ currentUser: UserType }> = ({ currentUser }) => {
   const [contratos, setContratos] = useState<SgpClienteStatus[]>([]);
@@ -31,9 +32,7 @@ export const SgpView: React.FC<{ currentUser: UserType }> = ({ currentUser }) =>
   const fetchContratos = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/sgp/contratos', {
-        headers: { 'x-user-id': currentUser.id }
-      });
+      const res = await authenticatedFetch('/api/sgp/contratos');
       if (res.ok) {
         const data = await res.json();
         setContratos(data.contratos || []);
@@ -54,9 +53,7 @@ export const SgpView: React.FC<{ currentUser: UserType }> = ({ currentUser }) =>
     setDiagLoading(true);
     setDiagnostico(null);
     try {
-      const res = await fetch(`/api/sgp/contratos/${contrato.contratoId}/diagnostico`, {
-        headers: { 'x-user-id': currentUser.id }
-      });
+      const res = await authenticatedFetch(`/api/sgp/contratos/${contrato.contratoId}/diagnostico`);
       if (res.ok) {
         const data = await res.json();
         setDiagnostico(data.diagnostico);
@@ -74,9 +71,8 @@ export const SgpView: React.FC<{ currentUser: UserType }> = ({ currentUser }) =>
   const handleDesbloqueio = async (contratoId: string) => {
     setDesbloqueando(true);
     try {
-      const res = await fetch(`/api/sgp/contratos/${contratoId}/desbloqueio-confianca`, {
-        method: 'POST',
-        headers: { 'x-user-id': currentUser.id }
+      const res = await authenticatedFetch(`/api/sgp/contratos/${contratoId}/desbloqueio-confianca`, {
+        method: 'POST'
       });
 
       if (!res.ok) {

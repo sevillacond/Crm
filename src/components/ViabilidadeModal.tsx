@@ -11,6 +11,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { Contato, ViabilidadeConsulta, User } from '../types';
+import { authenticatedFetch } from '../utils/api';
 
 interface ViabilidadeModalProps {
   contato?: Contato | null;
@@ -37,11 +38,10 @@ export const ViabilidadeModal: React.FC<ViabilidadeModalProps> = ({
     setResult(null);
 
     try {
-      const response = await fetch('/api/viabilidade/consultar', {
+      const response = await authenticatedFetch('/api/viabilidade/consultar', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': currentUser.id
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           cep,

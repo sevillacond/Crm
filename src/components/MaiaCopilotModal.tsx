@@ -13,6 +13,7 @@ import {
   Bot
 } from 'lucide-react';
 import { Contato, Deal, Plano, User } from '../types';
+import { authenticatedFetch } from '../utils/api';
 
 interface MaiaCopilotModalProps {
   onClose: () => void;
@@ -74,11 +75,10 @@ export const MaiaCopilotModal: React.FC<MaiaCopilotModalProps> = ({
     setLoading(true);
 
     try {
-      const response = await fetch('/api/maia/chat', {
+      const response = await authenticatedFetch('/api/maia/chat', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': currentUser.id
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           prompt: text,

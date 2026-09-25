@@ -34,6 +34,10 @@ import { sgpService } from '../src/modules/sgp/sgp.service.ts';
 let passedCount = 0;
 let failedCount = 0;
 
+// P0.28: Credenciais de teste parametrizáveis (não fixas)
+const TEST_ADMIN_EMAIL = process.env.TEST_ADMIN_EMAIL || 'admin@enlace.net.br';
+const TEST_ADMIN_PASSWORD = process.env.TEST_ADMIN_PASSWORD || 'Enlace@2026!';
+
 async function runTest(name: string, fn: () => Promise<void>) {
   try {
     process.stdout.write(`⏳ [TEST] ${name} ... `);
@@ -57,9 +61,9 @@ async function main() {
   // ==========================================
 
   await runTest('1.1 Login válido gera sessão, token JWT e registra auditoria', async () => {
-    const session = await authService.login('admin@enlace.net.br', 'Enlace@2026!');
+    const session = await authService.login(TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD);
     assert(session.token, 'Token JWT deve ser gerado');
-    assert.strictEqual(session.user.email, 'admin@enlace.net.br');
+    assert.strictEqual(session.user.email, TEST_ADMIN_EMAIL);
     assert(session.user.instanceId, 'Usuário deve possuir instanceId associado');
 
     const validSession = await sessionsRepository.findValidSession(session.token);
@@ -69,7 +73,7 @@ async function main() {
 
   await runTest('1.2 Autenticação rejeita senha incorreta', async () => {
     try {
-      await authService.login('admin@enlace.net.br', 'SenhaErrada123!');
+      await authService.login(TEST_ADMIN_EMAIL, 'SenhaErrada123!');
       assert.fail('Deveria ter lançado erro de credenciais inválidas');
     } catch (err: any) {
       assert(err.message.includes('Credenciais inválidas') || err.message.includes('não confere'), 'Mensagem esperada');
@@ -78,7 +82,7 @@ async function main() {
 
   await runTest('1.3 Proibição de Senha Master Hardcoded (Usuário inexistente é rejeitado)', async () => {
     try {
-      await authService.login('usuario_fantasma@enlace.net.br', 'Enlace@2026!');
+      await authService.login('usuario_fantasma@enlace.net.br', TEST_ADMIN_PASSWORD);
       assert.fail('Deveria ter rejeitado usuário inexistente');
     } catch (err: any) {
       assert(err.message.includes('Credenciais') || err.message.includes('não encontrado'), 'Rejeitou com segurança');
@@ -150,7 +154,7 @@ async function main() {
   });
 
   await runTest('1.7 Logout revoga sessão e token fica inutilizável', async () => {
-    const session = await authService.login('admin@enlace.net.br', 'Enlace@2026!');
+    const session = await authService.login(TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD);
     const verifiedBefore = await authService.verifyToken(session.token);
     assert(verifiedBefore.sub, 'Token deve ser válido antes do logout');
 
@@ -1262,6 +1266,195 @@ async function main() {
     const approvalExecutedLog = auditLogs.find((l: any) => l.action === 'APPROVAL_EXECUTED');
     assert.ok(approvalExecutedLog, 'Evento de execução aprovada deve estar auditado');
     assert.strictEqual(approvalExecutedLog.instanceId, e2eInstanceId);
+  });
+
+  // ==========================================
+  // SUÍTE 9: AUDITORIA CRIPTOGRÁFICA & VERIFICAÇÃO DE CADEIA (P0.18)
+  // ==========================================
+
+  await runTest('9.1 Auditoria: Cadeia íntegra de múltiplos eventos é validada com sucesso', async () => {
+    const instAudit = `inst_audit_valid_${Date.now()}`;
+    const e1 = await auditoriaRepository.save({
+      instanceId: instAudit,
+      actorId: 'usr_audit_1',
+      actorName: 'Audit Operator',
+      actorRole: 'ATENDENTE',
+      action: 'CONTATO_CRIADO',
+      entityType: 'CONTATO',
+      entityId: 'ct_1',
+      details: 'Criação de contato para auditoria'
+    });
+    const e2 = await auditoriaRepository.save({
+      instanceId: instAudit,
+      actorId: 'usr_audit_1',
+      actorName: 'Audit Operator',
+      actorRole: 'ATENDENTE',
+      action: 'DEAL_CRIADO',
+      entityType: 'DEAL',
+      entityId: 'deal_1',
+      details: 'Criação de negócio para auditoria'
+    });
+    const e3 = await auditoriaRepository.save({
+      instanceId: instAudit,
+      actorId: 'usr_audit_1',
+      actorName: 'Audit Operator',
+      actorRole: 'SUPERVISOR',
+      action: 'DEAL_APROVADO',
+      entityType: 'DEAL',
+      entityId: 'deal_1',
+      details: 'Aprovação de negócio para auditoria'
+    });
+
+    assert.strictEqual(e2.previousHash, e1.hashIntegridade, 'e2 deve encadear com e1');
+    assert.strictEqual(e3.previousHash, e2.hashIntegridade, 'e3 deve encadear com e2');
+
+    const result = await auditoriaRepository.verifyAuditChain(instAudit);
+    assert.strictEqual(result.valid, true, 'Cadeia deve ser válida');
+    assert.strictEqual(result.totalEvents, 3, 'Deve conter 3 eventos');
+  });
+
+  await runTest('9.2 Auditoria: Adulteração de dados do evento (details) é detectada com HASH_TAMPERED', async () => {
+    const instAudit = `inst_audit_tamper_${Date.now()}`;
+    const e1 = await auditoriaRepository.save({
+      instanceId: instAudit,
+      actorId: 'usr_audit_1',
+      actorName: 'Audit Operator',
+      actorRole: 'ATENDENTE',
+      action: 'CONTATO_CRIADO',
+      entityType: 'CONTATO',
+      entityId: 'ct_1',
+      details: 'Mensagem original e legítima'
+    });
+    await auditoriaRepository.save({
+      instanceId: instAudit,
+      actorId: 'usr_audit_1',
+      actorName: 'Audit Operator',
+      actorRole: 'ATENDENTE',
+      action: 'CONTATO_ALTERADO',
+      entityType: 'CONTATO',
+      entityId: 'ct_1',
+      details: 'Segunda mensagem legítima'
+    });
+
+    // Simular adulteração maliciosa no evento e1
+    auditoriaRepository._tamperFallbackEventForTesting(instAudit, e1.id, {
+      details: 'Mensagem modificada por invasor sem recalcular hash'
+    });
+
+    const result = await auditoriaRepository.verifyAuditChain(instAudit);
+    assert.strictEqual(result.valid, false, 'Cadeia adulterada não deve ser válida');
+    assert.strictEqual(result.error, 'HASH_TAMPERED');
+    assert.strictEqual(result.brokenEventId, e1.id, 'Deve identificar o evento adulterado');
+  });
+
+  await runTest('9.3 Auditoria: Adulteração de payload (dadosPosteriores) é detectada com HASH_TAMPERED', async () => {
+    const instAudit = `inst_audit_payload_${Date.now()}`;
+    const e1 = await auditoriaRepository.save({
+      instanceId: instAudit,
+      actorId: 'usr_audit_1',
+      actorName: 'Audit Operator',
+      actorRole: 'ATENDENTE',
+      action: 'PLANO_ALTERADO',
+      entityType: 'PLANO',
+      entityId: 'pl_1',
+      details: 'Alteração de valor de plano',
+      dadosPosteriores: { preco: 99.90 }
+    });
+
+    // Adulterar o payload sensível
+    auditoriaRepository._tamperFallbackEventForTesting(instAudit, e1.id, {
+      dadosPosteriores: { preco: 19.90 } // Tentativa de fraude de preço no log
+    });
+
+    const result = await auditoriaRepository.verifyAuditChain(instAudit);
+    assert.strictEqual(result.valid, false, 'Adulteração de payload deve quebrar a validação');
+    assert.strictEqual(result.error, 'HASH_TAMPERED');
+  });
+
+  await runTest('9.4 Auditoria: Quebra de elo (previousHash inválido) é detectada com PREVIOUS_HASH_MISMATCH', async () => {
+    const instAudit = `inst_audit_chain_break_${Date.now()}`;
+    await auditoriaRepository.save({
+      instanceId: instAudit,
+      actorId: 'usr_audit_1',
+      actorName: 'Audit Operator',
+      actorRole: 'ATENDENTE',
+      action: 'EVENTO_1',
+      entityType: 'SISTEMA',
+      entityId: 'sys_1',
+      details: 'Primeiro evento'
+    });
+    const e2 = await auditoriaRepository.save({
+      instanceId: instAudit,
+      actorId: 'usr_audit_1',
+      actorName: 'Audit Operator',
+      actorRole: 'ATENDENTE',
+      action: 'EVENTO_2',
+      entityType: 'SISTEMA',
+      entityId: 'sys_2',
+      details: 'Segundo evento'
+    });
+
+    // Romper o encadeamento entre e1 e e2
+    auditoriaRepository._tamperFallbackEventForTesting(instAudit, e2.id, {
+      previousHash: 'FORGED_INVALID_PREVIOUS_HASH_1234567890'
+    });
+
+    const result = await auditoriaRepository.verifyAuditChain(instAudit);
+    assert.strictEqual(result.valid, false, 'Cadeia com elo rompido deve falhar');
+    assert.strictEqual(result.error, 'PREVIOUS_HASH_MISMATCH');
+    assert.strictEqual(result.brokenEventId, e2.id);
+  });
+
+  // ==========================================
+  // SUÍTE 10: GOVERNANÇA DE PRODUÇÃO & MIGRAÇÕES (P0.4 & P0.11)
+  // ==========================================
+
+  await runTest('10.1 Produção Fail-Closed: Repositórios proíbem fallback em memória se banco offline em produção', async () => {
+    const originalEnv = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = 'production';
+      await contatosRepository.getById('c_qualquer', 'inst_qualquer');
+      assert.fail('Deveria ter lançado erro de PostgreSQL indisponível em produção');
+    } catch (err: any) {
+      assert(
+        err.message.includes('PostgreSQL indisponível') || 
+        err.message.includes('interrompida em produção') ||
+        err.message.includes('Falha no banco'),
+        'Falhou de forma fechada em produção (Fail Closed)'
+      );
+    } finally {
+      process.env.NODE_ENV = originalEnv;
+    }
+  });
+
+  await runTest('10.2 Produção Fail-Closed: Gateway Pix proíbe cobrança simulada se não configurado em produção', async () => {
+    const { paymentsAdapter } = await import('../src/integrations/payments/payments.adapter.ts');
+    const originalEnv = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = 'production';
+      await paymentsAdapter.gerarPixCobranca({
+        valor: 99.90,
+        cpfCnpj: '123.456.789-00',
+        nomeCliente: 'Cliente Teste',
+        descricao: 'Teste Fail-Closed Pix',
+        faturaId: 'fat_test_102'
+      });
+      assert.fail('Deveria ter lançado erro de Gateway Pix não configurado em produção');
+    } catch (err: any) {
+      assert(
+        err.message.includes('não configurado nesta instância em produção'),
+        'Rejeitou emissão de Pix simulado em produção'
+      );
+    } finally {
+      process.env.NODE_ENV = originalEnv;
+    }
+  });
+
+  await runTest('10.3 Produção Fail-Closed: SGP não expõe clientes demo para novas instâncias em produção', async () => {
+    const status = sgpService.getIntegrationStatus('inst_prod_nova_sem_sgp');
+    assert.strictEqual(status.status, 'NOT_CONFIGURED', 'Instância sem SGP configurado deve ser NOT_CONFIGURED');
+    const contratos = await sgpService.getContracts('inst_prod_nova_sem_sgp');
+    assert.strictEqual(contratos.length, 0, 'Instância limpa não deve conter contratos fabricados');
   });
 
   console.log('\n------------------------------------------------------');

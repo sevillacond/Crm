@@ -117,7 +117,8 @@ const RAW_TOOL_IMPLEMENTATIONS: Record<string, (params: any, actor: ActorContext
     return {
       dealId: params.dealId,
       descontoPercentual: params.desconto || 15,
-      status: 'SIMULADO',
+      status: 'MOCK',
+      modoOperacao: 'SIMULADO',
       aviso: 'MOCK/SIMULAÇÃO: Desconto simulado gerado pelo motor de regras. Cobrança/faturamento real não implementada nesta etapa.'
     };
   },

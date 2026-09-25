@@ -2,7 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import { ILlmProvider } from './llm.interface.ts';
 
 export class GeminiLlmAdapter implements ILlmProvider {
-  readonly name = 'Gemini 3.8 Flash';
+  readonly name = 'Google Gemini 3.8 Flash';
 
   async generateText(prompt: string, systemContext?: string): Promise<string | null> {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -12,13 +12,12 @@ export class GeminiLlmAdapter implements ILlmProvider {
 
     try {
       const ai = new GoogleGenAI();
-      const content = systemContext
-        ? `${systemContext}\n\nSolicitação do Operador: ${prompt}`
-        : prompt;
-
+      const modelName = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+      // P0.13: Separação estrita de SYSTEM (systemInstruction) e USER (contents)
       const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: [{ role: 'user', parts: [{ text: content }] }]
+        model: modelName,
+        contents: prompt,
+        config: systemContext ? { systemInstruction: systemContext } : undefined
       });
 
       return response.text || null;

@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { User as UserType, Contato } from '../types';
 import { notify } from '../utils/notify';
+import { authenticatedFetch } from '../utils/api';
 
 interface ChamadaItem {
   id: string;
@@ -57,9 +58,7 @@ export const WebPhoneView: React.FC<{
   const fetchChamadas = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/telefonia/chamadas', {
-        headers: { 'x-user-id': currentUser.id }
-      });
+      const res = await authenticatedFetch('/api/telefonia/chamadas');
       if (res.ok) {
         const data = await res.json();
         setChamadas(data.chamadas || []);
@@ -131,11 +130,10 @@ export const WebPhoneView: React.FC<{
     setIsMuted(false);
 
     try {
-      await fetch('/api/telefonia/chamadas', {
+      await authenticatedFetch('/api/telefonia/chamadas', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': currentUser.id
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           ramalOrigem: `Ramal ${currentUser.role === 'ADMIN' ? '1000' : '1004'} (${currentUser.name})`,

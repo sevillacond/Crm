@@ -1,4 +1,4 @@
-import { auditoriaRepository, AuditEventInput } from './auditoria.repository.ts';
+import { auditoriaRepository, AuditEventInput, AuditChainVerificationResult } from './auditoria.repository.ts';
 import { AuditLog } from '../../types/index.ts';
 
 class AuditoriaService {
@@ -11,6 +11,10 @@ class AuditoriaService {
 
   async logEvent(input: AuditEventInput): Promise<AuditLog> {
     return auditoriaRepository.save(input);
+  }
+
+  async verifyChain(instanceId: string): Promise<AuditChainVerificationResult> {
+    return auditoriaRepository.verifyAuditChain(instanceId);
   }
 }
 

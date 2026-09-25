@@ -1,6 +1,6 @@
 import { db, isDbConnected } from '../../db/client.ts';
 import { auditEventsTable, AuditEventDb } from '../../db/schema/auditEvents.ts';
-import { desc, eq, sql } from 'drizzle-orm';
+import { desc, asc, eq, sql } from 'drizzle-orm';
 import { INITIAL_AUDIT_LOGS } from '../../data/mockData.ts';
 import { AuditLog, Role } from '../../types/index.ts';
 import { env } from '../../config/env.ts';
@@ -24,6 +24,50 @@ export interface AuditEventInput {
   origem?: string;
   resultado?: string;
   isMaiaAction?: boolean;
+}
+
+export interface AuditChainVerificationResult {
+  valid: boolean;
+  totalEvents: number;
+  error?: string;
+  brokenEventId?: string;
+  expectedHash?: string;
+  actualHash?: string;
+  reason?: string;
+}
+
+export function computeCanonicalAuditHash(
+  previousHash: string,
+  event: {
+    id: string;
+    instanceId: string;
+    timestamp: string;
+    actorId: string;
+    action: string;
+    entityType: string;
+    entityId: string;
+    details: string;
+    dadosAnteriores?: any;
+    dadosPosteriores?: any;
+    resultado?: string;
+  }
+): string {
+  // P0.18: Serialização canônica determinística do payload completo
+  const canonicalPayload = JSON.stringify({
+    prev: previousHash,
+    id: event.id,
+    inst: event.instanceId,
+    ts: event.timestamp,
+    actId: event.actorId,
+    action: event.action,
+    type: event.entityType,
+    entId: event.entityId,
+    det: event.details,
+    ant: event.dadosAnteriores !== undefined ? event.dadosAnteriores : null,
+    pos: event.dadosPosteriores !== undefined ? event.dadosPosteriores : null,
+    res: event.resultado || 'SUCESSO'
+  });
+  return crypto.createHash('sha256').update(canonicalPayload, 'utf8').digest('hex');
 }
 
 class AuditoriaRepository {
@@ -117,9 +161,22 @@ class AuditoriaRepository {
             ? lastRow[0].hashIntegridade
             : `GENESIS_${finalInstanceId}_2026`;
 
-          // Calcular hash criptográfico SHA-256
-          const hashData = `${previousHash}|${id}|${finalInstanceId}|${timestampStr}|${input.actorId}|${input.action}|${input.entityType}|${input.entityId}|${input.details}`;
-          const hashIntegridade = crypto.createHash('sha256').update(hashData).digest('hex');
+          // Calcular hash criptográfico SHA-256 canônico
+          const sanitizedAnteriores = this.sanitizeData(input.dadosAnteriores);
+          const sanitizedPosteriores = this.sanitizeData(input.dadosPosteriores);
+          const hashIntegridade = computeCanonicalAuditHash(previousHash, {
+            id,
+            instanceId: finalInstanceId,
+            timestamp: timestampStr,
+            actorId: input.actorId,
+            action: input.action,
+            entityType: input.entityType,
+            entityId: input.entityId,
+            details: input.details,
+            dadosAnteriores: sanitizedAnteriores,
+            dadosPosteriores: sanitizedPosteriores,
+            resultado: input.resultado || 'SUCESSO'
+          });
 
           await tx.insert(auditEventsTable).values({
             id,
@@ -136,8 +193,8 @@ class AuditoriaRepository {
             userAgent: input.userAgent || null,
             requestId: input.requestId || null,
             correlationId: input.correlationId || null,
-            dadosAnteriores: this.sanitizeData(input.dadosAnteriores),
-            dadosPosteriores: this.sanitizeData(input.dadosPosteriores),
+            dadosAnteriores: sanitizedAnteriores,
+            dadosPosteriores: sanitizedPosteriores,
             origem: input.origem || 'WEB_CRM',
             resultado: input.resultado || 'SUCESSO',
             isMaiaAction: !!input.isMaiaAction,
@@ -181,8 +238,21 @@ class AuditoriaRepository {
         ? instanceEvents[0].hashIntegridade
         : `GENESIS_${finalInstanceId}_2026`;
 
-      const hashData = `${previousHash}|${id}|${finalInstanceId}|${timestampStr}|${input.actorId}|${input.action}|${input.entityType}|${input.entityId}|${input.details}`;
-      const hashIntegridade = crypto.createHash('sha256').update(hashData).digest('hex');
+      const sanitizedAnteriores = this.sanitizeData(input.dadosAnteriores);
+      const sanitizedPosteriores = this.sanitizeData(input.dadosPosteriores);
+      const hashIntegridade = computeCanonicalAuditHash(previousHash, {
+        id,
+        instanceId: finalInstanceId,
+        timestamp: timestampStr,
+        actorId: input.actorId,
+        action: input.action,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        details: input.details,
+        dadosAnteriores: sanitizedAnteriores,
+        dadosPosteriores: sanitizedPosteriores,
+        resultado: input.resultado || 'SUCESSO'
+      });
 
       const savedEvent = {
         id,
@@ -194,6 +264,9 @@ class AuditoriaRepository {
         entityType: input.entityType as any,
         entityId: input.entityId,
         details: input.details,
+        dadosAnteriores: sanitizedAnteriores,
+        dadosPosteriores: sanitizedPosteriores,
+        resultado: input.resultado || 'SUCESSO',
         isMaiaAction: !!input.isMaiaAction,
         instanceId: finalInstanceId,
         hashIntegridade,
@@ -207,6 +280,118 @@ class AuditoriaRepository {
 
   async create(input: AuditEventInput): Promise<AuditLog & { hashIntegridade: string; previousHash: string }> {
     return this.save(input);
+  }
+
+  async verifyAuditChain(instanceId: string): Promise<AuditChainVerificationResult> {
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é obrigatório para verificar a cadeia de auditoria.');
+    }
+
+    if (isDbConnected()) {
+      try {
+        const rows = await db
+          .select()
+          .from(auditEventsTable)
+          .where(eq(auditEventsTable.instanceId, instanceId))
+          .orderBy(asc(auditEventsTable.timestamp), asc(auditEventsTable.id));
+
+        return this.verifyEventsArray(instanceId, rows.map(r => ({
+          id: r.id,
+          instanceId: r.instanceId,
+          timestamp: r.timestamp.toISOString(),
+          actorId: r.actorId,
+          action: r.action,
+          entityType: r.entityType,
+          entityId: r.entityId,
+          details: r.details,
+          dadosAnteriores: r.dadosAnteriores,
+          dadosPosteriores: r.dadosPosteriores,
+          resultado: r.resultado,
+          previousHash: r.previousHash,
+          hashIntegridade: r.hashIntegridade
+        })));
+      } catch (err: any) {
+        if (env.NODE_ENV === 'production') {
+          throw new Error(`Falha no banco de dados ao verificar auditoria em produção: ${err.message}`);
+        }
+      }
+    }
+
+    if (env.NODE_ENV === 'production') {
+      throw new Error('Banco de dados PostgreSQL indisponível. Verificação de auditoria interrompida em produção.');
+    }
+
+    // Em fallback, os eventos são inseridos com unshift (mais novos primeiro)
+    const instanceEvents = this.fallbackEvents
+      .filter(e => e.instanceId === instanceId)
+      .slice()
+      .reverse(); // cronológico crescente
+
+    return this.verifyEventsArray(instanceId, instanceEvents);
+  }
+
+  private verifyEventsArray(instanceId: string, events: any[]): AuditChainVerificationResult {
+    if (events.length === 0) {
+      return { valid: true, totalEvents: 0 };
+    }
+
+    for (let i = 0; i < events.length; i++) {
+      const current = events[i];
+
+      // 1. Verificar encadeamento com o evento anterior
+      if (i > 0) {
+        const previous = events[i - 1];
+        if (current.previousHash !== previous.hashIntegridade) {
+          return {
+            valid: false,
+            totalEvents: events.length,
+            brokenEventId: current.id,
+            error: 'PREVIOUS_HASH_MISMATCH',
+            actualHash: current.previousHash,
+            expectedHash: previous.hashIntegridade,
+            reason: `Quebra de elo na cadeia de auditoria: o evento ${current.id} possui previousHash=${current.previousHash}, mas o evento anterior ${previous.id} possui hash=${previous.hashIntegridade}.`
+          };
+        }
+      }
+
+      // 2. Verificar integridade intrínseca recalculando o hash do payload canônico
+      const computedHash = computeCanonicalAuditHash(current.previousHash || `GENESIS_${instanceId}_2026`, {
+        id: current.id,
+        instanceId: current.instanceId || instanceId,
+        timestamp: current.timestamp,
+        actorId: current.actorId,
+        action: current.action,
+        entityType: current.entityType,
+        entityId: current.entityId,
+        details: current.details,
+        dadosAnteriores: current.dadosAnteriores,
+        dadosPosteriores: current.dadosPosteriores,
+        resultado: current.resultado
+      });
+
+      if (computedHash !== current.hashIntegridade) {
+        return {
+          valid: false,
+          totalEvents: events.length,
+          brokenEventId: current.id,
+          error: 'HASH_TAMPERED',
+          actualHash: current.hashIntegridade,
+          expectedHash: computedHash,
+          reason: `Adulteração detectada no evento ${current.id}: o hash recalculado ${computedHash} não coincide com o hash gravado ${current.hashIntegridade}. Dados ou payload violados.`
+        };
+      }
+    }
+
+    return { valid: true, totalEvents: events.length };
+  }
+
+  _tamperFallbackEventForTesting(instanceId: string, eventId: string, modification: Partial<any>): boolean {
+    const ev = this.fallbackEvents.find(e => e.id === eventId && e.instanceId === instanceId);
+    if (ev) {
+      Object.assign(ev, modification);
+      return true;
+    }
+    return false;
   }
 
   private sanitizeData(data: any): any {

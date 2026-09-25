@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { User as UserType } from '../types';
 import { notify } from '../utils/notify';
+import { authenticatedFetch } from '../utils/api';
 
 interface MaiaApproval {
   id: string;
@@ -75,11 +76,9 @@ export const MaiaCentralView: React.FC<{
   const fetchData = async () => {
     setLoading(true);
     try {
-      const headers = { 'x-user-id': currentUser.id };
-      
       const [resStatus, resApprovals] = await Promise.all([
-        fetch('/api/maia/status', { headers }),
-        fetch('/api/maia/approvals', { headers })
+        authenticatedFetch('/api/maia/status'),
+        authenticatedFetch('/api/maia/approvals')
       ]);
 
       if (resStatus.ok) {
@@ -106,11 +105,10 @@ export const MaiaCentralView: React.FC<{
     if (!canConfigure || updatingNivel) return;
     setUpdatingNivel(true);
     try {
-      const res = await fetch('/api/maia/autonomia', {
+      const res = await authenticatedFetch('/api/maia/autonomia', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': currentUser.id
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({ nivel: novoNivel })
       });
@@ -134,9 +132,8 @@ export const MaiaCentralView: React.FC<{
     setActionLoadingId(id);
     try {
       const url = `/api/maia/approvals/${id}/approve${executeNow ? '?execute=true' : ''}`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'x-user-id': currentUser.id }
+      const res = await authenticatedFetch(url, {
+        method: 'POST'
       });
 
       if (!res.ok) {
@@ -160,11 +157,10 @@ export const MaiaCentralView: React.FC<{
     }
     setActionLoadingId(id);
     try {
-      const res = await fetch(`/api/maia/approvals/${id}/reject`, {
+      const res = await authenticatedFetch(`/api/maia/approvals/${id}/reject`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': currentUser.id
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({ reason: rejectReason })
       });
@@ -188,9 +184,8 @@ export const MaiaCentralView: React.FC<{
   const handleExecute = async (id: string) => {
     setActionLoadingId(id);
     try {
-      const res = await fetch(`/api/maia/approvals/${id}/execute`, {
-        method: 'POST',
-        headers: { 'x-user-id': currentUser.id }
+      const res = await authenticatedFetch(`/api/maia/approvals/${id}/execute`, {
+        method: 'POST'
       });
 
       if (!res.ok) {
