@@ -124,11 +124,25 @@ export function validateEnv(overrideEnv?: Record<string, string | undefined>): A
     }
   }
 
-  // 7. CORS Origins validation
+  // 7. CORS Origins validation (P0.5: Obrigatório em produção, sem fallback para localhost)
   const rawCorsOrigins = envSource.CORS_ORIGINS || '';
-  const corsOrigins = rawCorsOrigins
-    ? rawCorsOrigins.split(',').map((o: string) => o.trim()).filter(Boolean)
-    : ['http://localhost:3000', 'http://127.0.0.1:3000'];
+  let corsOrigins: string[] = [];
+  if (isProduction) {
+    if (!rawCorsOrigins || rawCorsOrigins.trim() === '') {
+      failFast('[FATAL] Em ambiente de PRODUÇÃO, a variável CORS_ORIGINS é estritamente obrigatória.');
+    }
+    corsOrigins = rawCorsOrigins.split(',').map((o: string) => o.trim()).filter(Boolean);
+    if (corsOrigins.length === 0) {
+      failFast('[FATAL] Em ambiente de PRODUÇÃO, CORS_ORIGINS deve conter ao menos uma origem válida.');
+    }
+    if (corsOrigins.some(o => o.includes('localhost') || o.includes('127.0.0.1'))) {
+      failFast('[FATAL] Em ambiente de PRODUÇÃO, CORS_ORIGINS não pode conter localhost ou 127.0.0.1 como fallback produtivo.');
+    }
+  } else {
+    corsOrigins = rawCorsOrigins
+      ? rawCorsOrigins.split(',').map((o: string) => o.trim()).filter(Boolean)
+      : ['http://localhost:3000', 'http://127.0.0.1:3000'];
+  }
 
   return {
     NODE_ENV: nodeEnv,

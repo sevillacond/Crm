@@ -1,5 +1,6 @@
 # ==============================================================================
 # ENLACE TELECOM CRM — DOCKERFILE MULTI-STAGE DE PRODUÇÃO
+# Arquitetura Unificada: Bun Build + Bun Runtime (P0.6 Hardening)
 # Single-Tenant Dedicated ISP Instance (Build Determinístico com bun.lock)
 # ==============================================================================
 
@@ -21,9 +22,9 @@ COPY . .
 RUN bun run build
 
 # ==============================================================================
-# Estágio 2: Imagem Final de Execução (Minimalista & Segura)
+# Estágio 2: Imagem Final de Execução (Bun Runtime Unificado & Minimalista)
 # ==============================================================================
-FROM node:20-alpine AS runner
+FROM oven/bun:1-alpine AS runner
 
 WORKDIR /app
 
@@ -35,8 +36,9 @@ ENV PORT=3000
 RUN addgroup --system --gid 1001 enlace && \
     adduser --system --uid 1001 enlace
 
-# Copiar arquivos de configuração e dependências necessárias
+# Copiar arquivos de configuração e dependências necessárias do builder
 COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/bun.lock ./bun.lock
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/server.ts ./server.ts
@@ -53,7 +55,7 @@ EXPOSE 3000
 
 # Health check para orquestradores (Kubernetes, AWS ECS, Google Cloud Run)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/health/ready || exit 1
 
-# Comando de inicialização via tsx com Express
-CMD ["npm", "start"]
+# Comando de inicialização via Bun (Execução nativa de TypeScript com suporte a sinais POSIX)
+CMD ["bun", "server.ts"]

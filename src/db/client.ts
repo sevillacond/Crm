@@ -47,3 +47,12 @@ export async function checkDatabaseConnection(): Promise<boolean> {
 export function isDbConnected(): boolean {
   return isConnected;
 }
+
+export async function closeDatabaseConnection(): Promise<void> {
+  try {
+    await pool.end();
+    isConnected = false;
+  } catch (err: any) {
+    console.warn('[DB] Erro ao fechar pool de conexões:', err.message);
+  }
+}

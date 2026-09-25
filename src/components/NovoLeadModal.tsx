@@ -135,7 +135,7 @@ export const NovoLeadModal: React.FC<NovoLeadModalProps> = ({
                   type="text"
                   value={cep}
                   onChange={(e) => setCep(e.target.value)}
-                  placeholder="13000-000"
+                  placeholder="00000-000"
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono"
                 />
               </div>

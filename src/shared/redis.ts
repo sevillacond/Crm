@@ -212,3 +212,15 @@ export async function clearFailedLogin(key: string): Promise<void> {
 
   memoryLockoutStore.delete(key);
 }
+
+export async function closeRedis(): Promise<void> {
+  if (redisClient) {
+    try {
+      await redisClient.quit();
+    } catch {
+      redisClient.disconnect();
+    }
+    redisClient = null;
+    isRedisAvailable = false;
+  }
+}

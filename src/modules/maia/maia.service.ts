@@ -64,6 +64,10 @@ ${planos.map(p => `- ${p.nome}: R$ ${p.precoMensal.toFixed(2)}/mês (${p.downloa
 
 ${targetContato ? `Contato em foco: ${targetContato.nome}, Tel: ${targetContato.telefone}, CEP: ${targetContato.cep}` : ''}
 ${targetDeal ? `Negócio em foco: ${targetDeal.titulo}, Etapa: ${targetDeal.etapa}, Valor: R$ ${targetDeal.valorMensal}/mês` : ''}
+
+REGRAS MANDATÓRIAS DE GOVERNANÇA (ISP):
+1. NUNCA afirme ou declare portas físicas disponíveis em CTOs sem vistoria técnica de campo.
+2. Toda consulta ou estimativa de viabilidade técnica no sistema opera atualmente em modo simulado (MOCK). Portanto, para qualquer resposta sobre viabilidade técnica, você DEVE incluir expressamente o aviso: "[AVISO DE GOVERNANÇA: Estimativa teórica simulada (MOCK). Sujeito à vistoria técnica presencial.]"
 `;
 
     let aiResponseText = '';
@@ -90,6 +94,15 @@ ${targetDeal ? `Negócio em foco: ${targetDeal.titulo}, Etapa: ${targetDeal.etap
         aiResponseText = fallbackResult.aiResponseText;
         toolActionExecuted = fallbackResult.toolActionExecuted;
         pendingApprovalId = fallbackResult.pendingApprovalId;
+      }
+    }
+
+    // P0.12: Garantir que qualquer resposta sobre viabilidade técnica nunca declare portas reais e sempre contenha identificação de MOCK/Simulação
+    const isViabilidade = /viabilidade|cto|cobertura|disponibilidade|cep/i.test(input.prompt);
+    if (isViabilidade) {
+      aiResponseText = aiResponseText.replace(/Portas disponíveis:\s*\d+/gi, 'Portas estimadas (simulação não-vinculante)');
+      if (!aiResponseText.includes('MOCK') && !aiResponseText.includes('simulada') && !aiResponseText.includes('Aviso')) {
+        aiResponseText += '\n\n[AVISO DE GOVERNANÇA: Estimativa teórica simulada (MOCK). Sujeito à vistoria técnica presencial.]';
       }
     }
 
@@ -140,8 +153,10 @@ ${targetDeal ? `Negócio em foco: ${targetDeal.titulo}, Etapa: ${targetDeal.etap
     let pendingApprovalId: string | undefined;
 
     if (p.includes('viabilidade') || p.includes('cep') || p.includes('cto')) {
-      const cepReal = targetContato?.cep || input.context?.cep;
-      const numeroReal = targetContato?.numero || input.context?.numero;
+      const cepMatch = (input.prompt || '').match(/\d{5}-?\d{3}|\d{8}/);
+      const numMatch = (input.prompt || '').match(/(?:numero|número|n[ºo]|n\.)\s*(\d+)/i) || (input.prompt || '').match(/,\s*(\d+)/);
+      const cepReal = targetContato?.cep || input.context?.cep || (cepMatch ? cepMatch[0] : null);
+      const numeroReal = targetContato?.numero || input.context?.numero || (numMatch ? numMatch[1] : null);
 
       if (!cepReal || !numeroReal) {
         aiResponseText = '[MOCK/DEMO - Governança] Para simular a consulta de viabilidade técnica, é necessário informar o CEP e o número do imóvel.';
@@ -162,7 +177,8 @@ ${targetDeal ? `Negócio em foco: ${targetDeal.titulo}, Etapa: ${targetDeal.etap
             aiResponseText = `[MOCK/DEMO - Governança] A consulta de viabilidade requer aprovação humana prévia (Solicitação: ${execResult.approvalId}).`;
           } else {
             toolActionExecuted = { name: 'consultar_viabilidade', ...execResult.data };
-            aiResponseText = `[MOCK/DEMO - Telecom] Analisei a região informada. Estimativa teórica de viabilidade com base no endereço fornecido. Portas disponíveis: ${execResult.data.portasLivres ?? 4}.`;
+            // P0.12: Se simulado (MOCK), NUNCA declarar portas físicas disponíveis
+            aiResponseText = `[MOCK/DEMO - Estimativa Simulada] Realizada estimativa teórica simulada (MOCK). Aviso: Integração GIS/SGP não conectada. Não é possível confirmar disponibilidade física de portas de CTO sem vistoria técnica de campo.`;
           }
         } catch (err: any) {
           aiResponseText = `[MOCK/DEMO - Erro de Governança] ${err.message}`;

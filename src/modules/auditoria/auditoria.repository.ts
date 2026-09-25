@@ -224,6 +224,7 @@ class AuditoriaRepository {
   private mapToDomain(row: AuditEventDb): AuditLog {
     return {
       id: row.id,
+      instanceId: row.instanceId,
       timestamp: row.timestamp ? row.timestamp.toISOString() : new Date().toISOString(),
       actorId: row.actorId,
       actorName: row.actorName,
@@ -232,7 +233,9 @@ class AuditoriaRepository {
       entityType: row.entityType as any,
       entityId: row.entityId,
       details: row.details,
-      isMaiaAction: row.isMaiaAction
+      isMaiaAction: row.isMaiaAction,
+      hashIntegridade: row.hashIntegridade || undefined,
+      previousHash: row.previousHash || undefined
     };
   }
 }

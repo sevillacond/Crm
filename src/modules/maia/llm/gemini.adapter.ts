@@ -2,7 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import { ILlmProvider } from './llm.interface.ts';
 
 export class GeminiLlmAdapter implements ILlmProvider {
-  readonly name = 'Gemini 2.5 Flash';
+  readonly name = 'Gemini 3.8 Flash';
 
   async generateText(prompt: string, systemContext?: string): Promise<string | null> {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -17,7 +17,7 @@ export class GeminiLlmAdapter implements ILlmProvider {
         : prompt;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.8-flash',
         contents: [{ role: 'user', parts: [{ text: content }] }]
       });
 

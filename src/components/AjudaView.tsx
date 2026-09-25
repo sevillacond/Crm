@@ -22,14 +22,45 @@ import {
   Cpu,
   Server,
   DollarSign,
-  Headphones
+  Headphones,
+  X
 } from 'lucide-react';
 import { notify } from '../utils/notify';
 
 export const AjudaView: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'GUIAS' | 'GLOSSARIO' | 'FAQ' | 'ATALHOS' | 'SUPORTE'>('GUIAS');
+  const [activeTab, setActiveTab] = useState<'GUIAS' | 'GLOSSARIO' | 'PRD' | 'FAQ' | 'ATALHOS' | 'SUPORTE'>('GUIAS');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [expandedFaq, setExpandedFaq] = useState<string | null>('faq-1');
+  const [selectedPrdModule, setSelectedPrdModule] = useState<string | null>(null);
+
+  // Módulos do PRD Modular (01 a 25)
+  const prdModulos = [
+    { id: '01', titulo: '01 — Visão do Produto', categoria: 'Estratégia', arquivo: '01-VISAO-PRODUTO.md', resumo: 'Proposta de valor, personas (SDR, Supervisor, Técnico, Admin, MaIA) e posicionamento no ecossistema ISP.' },
+    { id: '02', titulo: '02 — Arquitetura de Sistema', categoria: 'Arquitetura', arquivo: '02-ARQUITETURA.md', resumo: 'Isolamento estrito single-tenant por CNPJ, backend Node/Express, Drizzle ORM e mediação da MaIA via Tool Gateway.' },
+    { id: '03', titulo: '03 — Identidade e Acesso (RBAC)', categoria: 'Segurança', arquivo: '03-IDENTIDADE-E-ACESSO.md', resumo: 'Matriz de permissões (ADMIN, SUPERVISOR, ATENDENTE, TECNICO, MAIA_AGENT) e ActorContext validado por JWT.' },
+    { id: '04', titulo: '04 — CRM Core', categoria: 'Negócio', arquivo: '04-CRM-CORE.md', resumo: 'Modelo de domínio de Contatos/Assinantes, Catálogo de Planos FTTH e Oportunidades comerciais (Deals).' },
+    { id: '05', titulo: '05 — Funil Comercial Kanban', categoria: 'Negócio', arquivo: '05-KANBAN.md', resumo: 'Pipeline de 7 etapas da descoberta à ativação, ações rápidas de viabilidade e métricas de MRR em tempo real.' },
+    { id: '06', titulo: '06 — Inbox Omnichannel', categoria: 'Atendimento', arquivo: '06-INBOX-OMNICHANNEL.md', resumo: 'Fila unificada de mensagens (WhatsApp, Webchat, E-mail, Voz), notas internas e contexto do assinante.' },
+    { id: '07', titulo: '07 — WhatsApp Oficial (Meta API)', categoria: 'Atendimento', arquivo: '07-WHATSAPP.md', resumo: 'Meta Cloud API oficial, webhooks assinados HMAC-SHA256, modelos HSM e gestão de janela de 24h.' },
+    { id: '08', titulo: '08 — WebChat Embutido', categoria: 'Atendimento', arquivo: '08-WEBCHAT.md', resumo: 'Widget flutuante para sites e landing pages com pré-atendimento, triagem de CEP e transbordo para humanos.' },
+    { id: '09', titulo: '09 — WebPhone SIP & WebRTC', categoria: 'Telefonia', arquivo: '09-WEBPHONE.md', resumo: 'Softphone WebRTC embutido via WebSocket seguro (WSS) integrado ao Asterisk/FreePBX com DTMF e discador.' },
+    { id: '10', titulo: '10 — Flow Builder', categoria: 'Automação', arquivo: '10-FLUXOS-ATENDIMENTO.md', resumo: 'Construtor visual de fluxos de navegação, URA de autoatendimento, coleta de CPF/CEP e transbordo.' },
+    { id: '11', titulo: '11 — MaIA: Motor IA & Governança', categoria: 'Inteligência Artificial', arquivo: '11-MAIA.md', resumo: 'Google Gemini 2.5 Flash, níveis N0 a N4, Policy Engine, Fail-Closed, paramsHash anti-tamper e viabilidade MOCK.' },
+    { id: '12', titulo: '12 — Filas, SLA & Supervisor', categoria: 'Gestão', arquivo: '12-FILAS-SLA-SUPERVISOR.md', resumo: 'Cockpit do supervisor com escuta silenciosa, sussurro, assunção de tickets e monitoria de TME/TMA.' },
+    { id: '13', titulo: '13 — Base de Conhecimento & RAG', categoria: 'Inteligência Artificial', arquivo: '13-BASE-CONHECIMENTO.md', resumo: 'SOPs de telecom, manuais de LOS/PPPoE, regras de fidelidade e ingestão contextual para respostas da IA.' },
+    { id: '14', titulo: '14 — Campanhas & Disparos', categoria: 'Comercial', arquivo: '14-CAMPANHAS.md', resumo: 'Segmentação por bairro/OLT, templates HSM Meta, controle de vazão (rate limiting) e opt-out automático.' },
+    { id: '15', titulo: '15 — Hub de Integrações (SGP/ERP)', categoria: 'Integrações', arquivo: '15-INTEGRACOES.md', resumo: 'Adapters para IXC, MK-AUTH, HubSoft e Voalle com resposta NOT_CONFIGURED na ausência de credenciais reais.' },
+    { id: '16', titulo: '16 — Cobrança, Faturas & Pix', categoria: 'Financeiro', arquivo: '16-COBRANCA.md', resumo: 'Pix instantâneo Banco Central com baixa automática via webhook e visualização de boletos bancários em PDF.' },
+    { id: '17', titulo: '17 — Relatórios Gerenciais & BI', categoria: 'Gestão', arquivo: '17-RELATORIOS.md', resumo: 'Métricas de MRR, Ticket Médio, Churn, First-Time Right do campo e exportação de dados em CSV/XLSX.' },
+    { id: '18', titulo: '18 — Trilha de Auditoria & LGPD', categoria: 'Segurança', arquivo: '18-AUDITORIA-LGPD.md', resumo: 'Encadeamento criptográfico linear SHA-256 com PostgreSQL Advisory Locks e exportação de dados do titular.' },
+    { id: '19', titulo: '19 — Infraestrutura & Containers', categoria: 'DevOps', arquivo: '19-INFRA-CONTAINERS.md', resumo: 'Dockerfile multi-stage em Bun, execução como usuário não-root enlace, graceful shutdown de 10s e bind local.' },
+    { id: '20', titulo: '20 — Segurança & Fail-Closed', categoria: 'Segurança', arquivo: '20-SEGURANCA.md', resumo: 'Startup failure para senhas fracas, isolamento cross-instance no banco e bloqueio de falhas de infraestrutura.' },
+    { id: '21', titulo: '21 — Observabilidade & Backup', categoria: 'DevOps', arquivo: '21-OBSERVABILIDADE-BACKUP.md', resumo: 'Logs estruturados em JSON, liveness/readiness probes, rotinas diárias de pg_dump e Point-in-Time Recovery.' },
+    { id: '22', titulo: '22 — Testes & Homologação', categoria: 'Qualidade', arquivo: '22-TESTES-HOMOLOGACAO.md', resumo: 'Suíte automatizada com 43 testes de integração, concorrência, RBAC negativo, governança MaIA e fluxo E2E.' },
+    { id: '23', titulo: '23 — Deploy & Operação', categoria: 'DevOps', arquivo: '23-DEPLOY-OPERACAO.md', resumo: 'Modelos VPS com Docker Compose e Serverless Cloud Run com checklist pré-deploy e rolling updates.' },
+    { id: '24', titulo: '24 — Limites do Produto', categoria: 'Estratégia', arquivo: '24-LIMITES-DO-PRODUTO.md', resumo: 'Fronteiras arquiteturais formais: não substitui ERP fiscal (NFCom 62), PBX de mídia física ou laudo óptico GIS.' },
+    { id: '25', titulo: '25 — Ajuda, Glossário & SOP', categoria: 'Operação', arquivo: '25-AJUDA-SOP-OPERACIONAL.md', resumo: 'Glossário técnico (dBm, CTO, GPON, LOS, PPPoE), procedimentos de atendimento e atalhos de produtividade.' }
+  ];
 
   // Guias Rápidos
   const guias = [
@@ -311,6 +342,18 @@ export const AjudaView: React.FC = () => {
         </button>
 
         <button
+          onClick={() => setActiveTab('PRD')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === 'PRD'
+              ? 'bg-indigo-950 text-indigo-300 border border-indigo-800 font-bold shadow-md'
+              : 'text-slate-400 hover:text-white hover:bg-slate-900'
+          }`}
+        >
+          <FileText className="w-4 h-4 text-indigo-400" />
+          <span>Especificação PRD (25 Módulos)</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('FAQ')}
           className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
             activeTab === 'FAQ'
@@ -415,6 +458,76 @@ export const AjudaView: React.FC = () => {
                 </p>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* TAB CONTENT: PRD MODULAR */}
+      {activeTab === 'PRD' && (
+        <div className="space-y-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 text-sm font-bold text-white mb-1">
+                <FileText className="w-4 h-4 text-indigo-400" />
+                <span>Especificação de Engenharia &amp; PRD Modular (25 Cadernos)</span>
+              </div>
+              <p className="text-xs text-slate-400 max-w-2xl">
+                Arquitetura de microsserviços, governança de dados, isolamento single-tenant por CNPJ e diretrizes técnicas para desenvolvedores, auditores e homologadores. Localizados em <code className="text-indigo-300 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 font-mono text-[11px]">docs/prd/</code>.
+              </p>
+            </div>
+            <div className="text-xs font-mono text-indigo-300 bg-indigo-950/70 border border-indigo-800/80 px-3 py-1.5 rounded-xl font-bold">
+              25 Módulos Homologados
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            {prdModulos
+              .filter(p =>
+                !searchQuery ||
+                p.titulo.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                p.categoria.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                p.resumo.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                p.id.includes(searchQuery)
+              )
+              .map((mod) => (
+                <div 
+                  key={mod.id}
+                  className="bg-slate-900/90 hover:bg-slate-900 border border-slate-800 hover:border-indigo-800/80 rounded-2xl p-4 shadow-xl space-y-2.5 transition-all flex flex-col justify-between"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-mono font-bold text-indigo-300 bg-indigo-950 px-2 py-0.5 rounded border border-indigo-800/60">
+                        {mod.categoria}
+                      </span>
+                      <span className="text-[10px] font-mono text-slate-500">
+                        {mod.arquivo}
+                      </span>
+                    </div>
+                    <h4 className="text-xs font-bold text-white tracking-tight">
+                      {mod.titulo}
+                    </h4>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      {mod.resumo}
+                    </p>
+                  </div>
+                  <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-[10px]">
+                    <span className="text-emerald-400 font-medium flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                      Status: Concluído
+                    </span>
+                    <button
+                      onClick={() => {
+                        setSelectedPrdModule(mod.arquivo);
+                        notify(`Visualizando caderno de engenharia: docs/prd/${mod.arquivo}`, 'info');
+                      }}
+                      className="text-indigo-400 hover:text-indigo-300 font-mono flex items-center gap-1 cursor-pointer font-bold"
+                    >
+                      <span>Ver Caderno</span>
+                      <ChevronRight className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+              ))}
           </div>
         </div>
       )}
@@ -551,6 +664,74 @@ export const AjudaView: React.FC = () => {
                 <li>&quot;O cliente está com -28.5 dBm. Qual a causa provável?&quot;</li>
               </ul>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Visualizador do Caderno PRD */}
+      {selectedPrdModule && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto p-6 shadow-2xl space-y-5 relative">
+            <button
+              onClick={() => setSelectedPrdModule(null)}
+              className="absolute top-5 right-5 text-slate-400 hover:text-white p-1 rounded-lg bg-slate-800 hover:bg-slate-700 transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            {(() => {
+              const mod = prdModulos.find(m => m.arquivo === selectedPrdModule);
+              if (!mod) return null;
+              return (
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-mono font-bold text-indigo-300 bg-indigo-950 px-2.5 py-0.5 rounded border border-indigo-800">
+                      {mod.categoria}
+                    </span>
+                    <span className="text-xs font-mono text-slate-400">
+                      docs/prd/{mod.arquivo}
+                    </span>
+                  </div>
+
+                  <h3 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
+                    <FileText className="w-5 h-5 text-indigo-400" />
+                    <span>{mod.titulo}</span>
+                  </h3>
+
+                  <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 text-xs text-slate-300 leading-relaxed space-y-2">
+                    <div className="font-bold text-white text-xs uppercase tracking-wider text-indigo-300">
+                      Resumo Executivo do Caderno:
+                    </div>
+                    <p>{mod.resumo}</p>
+                  </div>
+
+                  <div className="space-y-2.5 text-xs text-slate-300">
+                    <div className="font-bold text-white text-xs uppercase tracking-wider text-slate-400">
+                      Diretrizes de Arquitetura &amp; Conformidade:
+                    </div>
+                    <ul className="space-y-1.5 list-disc list-inside text-slate-300 text-xs">
+                      <li><strong className="text-white">Isolamento Single-Tenant:</strong> Dados contidos por CNPJ com validação em nível de banco e token.</li>
+                      <li><strong className="text-white">Conformidade Regulatória:</strong> Regras de negócio alinhadas com resoluções Anatel e LGPD (Lei nº 13.709/2018).</li>
+                      <li><strong className="text-white">Governança da MaIA:</strong> Mediação estrita via Tool Gateway sem permissão irrestrita de escrita ou SQL.</li>
+                      <li><strong className="text-white">Fail-Closed:</strong> Interrupção segura de transações críticas na ausência de banco de dados ou autenticação.</li>
+                    </ul>
+                  </div>
+
+                  <div className="pt-4 border-t border-slate-800 flex items-center justify-between">
+                    <span className="text-xs font-mono text-emerald-400 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                      Especificação Ativa e Homologada
+                    </span>
+                    <button
+                      onClick={() => setSelectedPrdModule(null)}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                    >
+                      Fechar Visualizador
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}

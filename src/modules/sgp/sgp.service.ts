@@ -32,6 +32,11 @@ class SgpService {
   }
 
   private seedDefaultData() {
+    // P0.4 / P0.12: Em produção, JAMAIS carregar contratos de demonstração/mock em memória
+    if (process.env.NODE_ENV === 'production') {
+      return;
+    }
+
     const devContracts: SgpContractMock[] = [
       {
         contratoId: 'CTR-IXC-8821',

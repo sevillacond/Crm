@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, varchar, integer, numeric, jsonb, index } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, varchar, integer, numeric, jsonb, index, unique, foreignKey } from 'drizzle-orm/pg-core';
 import { instancesTable } from './instances.ts';
 import { contatosTable } from './contatos.ts';
 import { dealsTable } from './deals.ts';
@@ -41,6 +41,17 @@ export const ordensServicoTable = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
   },
   (table) => ({
+    uqOsInstance: unique('uq_ordens_servico_id_instance').on(table.id, table.instanceId),
+    fkOsContatoInstance: foreignKey({
+      name: 'fk_os_contato_instance',
+      columns: [table.contatoId, table.instanceId],
+      foreignColumns: [contatosTable.id, contatosTable.instanceId]
+    }),
+    fkOsTecnicoInstance: foreignKey({
+      name: 'fk_os_tecnico_instance',
+      columns: [table.tecnicoId, table.instanceId],
+      foreignColumns: [usersTable.id, usersTable.instanceId]
+    }),
     instanceIdx: index('idx_os_instance').on(table.instanceId),
     statusIdx: index('idx_os_status').on(table.status),
     tecnicoIdx: index('idx_os_tecnico').on(table.tecnicoId)

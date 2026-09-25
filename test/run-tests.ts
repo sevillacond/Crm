@@ -1050,6 +1050,220 @@ async function main() {
     }
   });
 
+  // ==========================================
+  // SUÍTE 8: HARDENING FINAL (P0.10, P0.11, P0.12, P0.14 E2E)
+  // ==========================================
+
+  await runTest('8.1 (P0.10 Teste C) Usuário legítimo A envia { instanceId: "instance-B" } no payload -> Backend ignora e utiliza actor.instanceId', async () => {
+    const instA = `inst_auth_legit_A_${Date.now()}`;
+    const instB = `inst_auth_forged_B_${Date.now()}`;
+
+    const actorA = createActorContext({
+      id: 'usr_legit_A',
+      name: 'Operador Legítimo A',
+      email: 'operador.a@provedor-a.com.br',
+      role: 'ATENDENTE',
+      avatar: '',
+      department: 'Comercial',
+      status: 'ONLINE',
+      instanceId: instA
+    });
+
+    const { contatosService } = await import('../src/modules/contatos/contatos.service.ts');
+
+    // Usuário envia maliciosamente instanceId da instância B no body
+    const inputWithForgedInstanceId: any = {
+      nome: 'Lead Tentativa Injeção Cross-Instance',
+      telefone: '11988887777',
+      email: 'lead.ataque@alvo.com',
+      instanceId: instB // Tentativa de injetar dados na instância B
+    };
+
+    const criado = await contatosService.createContato(inputWithForgedInstanceId, actorA);
+
+    // O contato DEVE ter sido persistido na instância A do ator e NÃO na instância B
+    assert.strictEqual(criado.nome, 'Lead Tentativa Injeção Cross-Instance');
+    
+    // Consultar na instância A deve existir
+    const noInstA = await contatosRepository.getById(criado.id, instA);
+    assert.ok(noInstA, 'Contato deve estar na instância A do ator');
+
+    // Consultar na instância B deve retornar null
+    const noInstB = await contatosRepository.getById(criado.id, instB);
+    assert.strictEqual(noInstB, null, 'Contato NUNCA pode ter sido atribuído à instância B');
+  });
+
+  await runTest('8.2 (P0.11 RBAC Negativo) ATENDENTE tenta criar/alterar usuário -> Rejeitado (403)', async () => {
+    const canCreateUser = hasPermission('ATENDENTE', 'usuarios:create');
+    const canUpdateUser = hasPermission('ATENDENTE', 'usuarios:update');
+    const canDeleteUser = hasPermission('ATENDENTE', 'usuarios:delete');
+
+    assert.strictEqual(canCreateUser, false, 'ATENDENTE não pode criar usuários');
+    assert.strictEqual(canUpdateUser, false, 'ATENDENTE não pode alterar usuários');
+    assert.strictEqual(canDeleteUser, false, 'ATENDENTE não pode deletar usuários');
+  });
+
+  await runTest('8.3 (P0.11 RBAC Negativo) TECNICO tenta visualizar cobrança -> Rejeitado (403)', async () => {
+    const canReadCobrancaTecnico = hasPermission('TECNICO', 'cobranca:read');
+    assert.strictEqual(canReadCobrancaTecnico, false, 'TECNICO não tem permissão para visualizar cobrança');
+
+    const canReadCobrancaAdmin = hasPermission('ADMIN', 'cobranca:read');
+    assert.strictEqual(canReadCobrancaAdmin, true, 'ADMIN tem permissão para visualizar cobrança');
+  });
+
+  await runTest('8.4 (P0.11 RBAC Negativo) MAIA_AGENT tenta alterar política da MaIA -> Rejeitado (403)', async () => {
+    const canConfigureMaia = hasPermission('MAIA_AGENT', 'maia:configure');
+    assert.strictEqual(canConfigureMaia, false, 'MAIA_AGENT não pode alterar políticas de governança');
+  });
+
+  await runTest('8.5 (P0.11 Isolamento Usuário) Usuário da Instância A não acessa Usuário da Instância B', async () => {
+    const instA = `inst_user_iso_A_${Date.now()}`;
+    const instB = `inst_user_iso_B_${Date.now()}`;
+
+    // Criar usuário na instância B
+    const userB = await usersRepository.create({
+      id: `usr_b_${Date.now()}`,
+      instanceId: instB,
+      name: 'Funcionário B',
+      email: `func.b.${Date.now()}@provedor-b.com.br`,
+      role: 'ATENDENTE',
+      avatar: '',
+      department: 'Atendimento',
+      status: 'ONLINE'
+    }, 'hash');
+
+    // Consultar lista da Instância A não deve conter o usuário B
+    const usersInA = await usersRepository.getAll(instA);
+    const foundBInA = usersInA.some(u => u.id === userB.id);
+    assert.strictEqual(foundBInA, false, 'Usuário da Instância B não aparece na lista da Instância A');
+  });
+
+  await runTest('8.6 (P0.12 Viabilidade MOCK) Simulador nunca afirma disponibilidade real de portas físicas', async () => {
+    const { viabilidadeService } = await import('../src/modules/viabilidade/viabilidade.service.ts');
+    const res = await viabilidadeService.consultar({
+      cep: '13024-000',
+      numero: '120'
+    });
+
+    assert.strictEqual(res.modoExecucao, 'MOCK_DEMO_SIMULADO');
+    assert.strictEqual(res.isEstimativaHeuristica, true);
+    assert.ok(res.avisoLegal.includes('AVISO DE GOVERNANÇA'), 'Deve conter aviso legal de simulação');
+
+    // Executar MaIA com viabilidade e verificar que resposta não afirma porta física real
+    const actor = createActorContext({
+      id: 'usr_viab_actor',
+      name: 'Operador Teste',
+      email: 'op@provedor.com.br',
+      role: 'ATENDENTE',
+      avatar: '',
+      department: 'Comercial',
+      status: 'ONLINE',
+      instanceId: 'inst_viab_mock_test'
+    });
+
+    const maiaRes = await maiaService.processPrompt({
+      prompt: 'Qual a viabilidade para o CEP 13024-000 no numero 120?'
+    }, actor);
+
+    assert.ok(!maiaRes.resposta.includes('Portas disponíveis: 4'), 'MaIA nunca deve declarar portas disponíveis sem dados reais');
+    assert.ok(maiaRes.resposta.includes('MOCK') || maiaRes.resposta.includes('simulada') || maiaRes.resposta.includes('Aviso'), 'Deve conter identificação clara de MOCK/Simulação');
+  });
+
+  await runTest('8.7 (P0.14 Fluxo E2E Completo) Login -> ActorContext -> Contato -> Deal -> Plano -> MaIA -> Policy -> Aprovação Humana -> Execução -> Auditoria', async () => {
+    const e2eInstanceId = `inst_e2e_${Date.now()}`;
+
+    // 1. Login e obtenção do ActorContext
+    const session = await authService.login('admin@enlace.net.br', 'Enlace@2026!');
+    const actor = createActorContext({
+      ...session.user,
+      instanceId: e2eInstanceId
+    });
+    assert.strictEqual(actor.instanceId, e2eInstanceId);
+
+    // 2. Criar Plano na instância
+    const plano = await planosRepository.create({
+      id: `pl_e2e_${Date.now()}`,
+      nome: 'Fibra Ultra 500M',
+      downloadMbps: 500,
+      uploadMbps: 250,
+      precoMensal: 99.90,
+      adesao: 0,
+      tecnologia: 'FTTH (Fibra Óptica)',
+      popular: true,
+      recursos: ['Wifi 6', 'IPv6 Fixo']
+    }, e2eInstanceId);
+    assert.ok(plano);
+
+    // 3. Criar Contato (Lead)
+    const { contatosService } = await import('../src/modules/contatos/contatos.service.ts');
+    const contato = await contatosService.createContato({
+      nome: 'Carlos Oliveira E2E',
+      cpfCnpj: '123.456.789-01',
+      telefone: '19987654321',
+      email: 'carlos.e2e@cliente.com.br',
+      cep: '13024-000',
+      numero: '250',
+      logradouro: 'Rua das Flores',
+      bairro: 'Cambuí',
+      cidade: 'Campinas',
+      uf: 'SP'
+    }, actor);
+    assert.ok(contato);
+
+    // 4. Criar Deal (Oportunidade) vinculando Contato e Plano
+    const deal = await dealsService.createDeal({
+      titulo: 'Contratação Fibra 500M - Carlos Oliveira',
+      contatoId: contato.id,
+      planoId: plano.id,
+      valorMensal: 99.90,
+      taxaAdesao: 0,
+      dataPrevisao: '2026-10-15',
+      responsavelId: actor.userId
+    }, actor);
+    assert.ok(deal);
+
+    // 5. Configurar MaIA no Nível N3 (Human-in-the-Loop)
+    await maiaPolicyEngine.setNivel(3, e2eInstanceId);
+
+    // 6. MaIA analisa e aciona ferramenta com necessidade de aprovação humana (desconto de exceção)
+    const execResult = await executeMaiaTool({
+      toolName: 'aplicar_desconto_excecao',
+      params: { dealId: deal.id, desconto: 20 },
+      actor
+    });
+
+    assert.strictEqual(execResult.status, 'PENDING_APPROVAL');
+    assert.ok(execResult.approvalId, 'Solicitação de aprovação deve ser gerada');
+
+    // 7. Revisor humano (Supervisor/Admin) aprova a solicitação
+    const supervisorActor = createActorContext({
+      id: 'usr_supervisor_e2e',
+      name: 'Supervisor Comercial',
+      email: 'supervisor@provedor.com.br',
+      role: 'SUPERVISOR',
+      avatar: '',
+      department: 'Diretoria',
+      status: 'ONLINE',
+      instanceId: e2eInstanceId
+    });
+
+    const approved = await approveToolApproval(execResult.approvalId!, supervisorActor);
+    assert.strictEqual(approved.status, 'APPROVED');
+
+    // 8. Execução da ferramenta aprovada
+    const executed = await executeApprovedTool(execResult.approvalId!, supervisorActor);
+    assert.strictEqual(executed.status, 'EXECUTED');
+    assert.strictEqual(executed.data.descontoPercentual, 20);
+
+    // 9. Auditoria imutável verificada
+    const auditLogs = await auditoriaRepository.list(e2eInstanceId, 20);
+    assert.ok(auditLogs.length >= 3, 'Trilha de auditoria deve conter eventos de contato, deal e aprovação');
+
+    const approvalExecutedLog = auditLogs.find((l: any) => l.action === 'APPROVAL_EXECUTED');
+    assert.ok(approvalExecutedLog, 'Evento de execução aprovada deve estar auditado');
+    assert.strictEqual(approvalExecutedLog.instanceId, e2eInstanceId);
+  });
+
   console.log('\n------------------------------------------------------');
   console.log(`Resultado Final: ${passedCount} passou, ${failedCount} falhou.`);
   console.log('------------------------------------------------------\n');

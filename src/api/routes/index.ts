@@ -11,6 +11,7 @@ import { viabilidadeRoutes } from './viabilidade.routes.ts';
 import { maiaRoutes } from './maia.routes.ts';
 import { sgpRoutes } from './sgp.routes.ts';
 import { telefoniaRoutes } from './telefonia.routes.ts';
+import { cobrancaRoutes } from './cobranca.routes.ts';
 
 const router = Router();
 
@@ -26,5 +27,6 @@ router.use('/viabilidade', viabilidadeRoutes);
 router.use('/maia', maiaRoutes);
 router.use('/sgp', sgpRoutes);
 router.use('/telefonia', telefoniaRoutes);
+router.use('/cobranca', cobrancaRoutes);
 
 export const apiRoutes = router;

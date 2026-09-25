@@ -71,6 +71,43 @@ class PlanosRepository {
     return this.fallbackPlanos.find(p => p.id === id && p.instanceId === instanceId) || null;
   }
 
+  async create(plano: Plano, instanceId: string): Promise<Plano> {
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é obrigatório para cadastrar plano.');
+    }
+
+    if (isDbConnected()) {
+      try {
+        await db.insert(planosTable).values({
+          id: plano.id,
+          instanceId,
+          nome: plano.nome,
+          downloadMbps: plano.downloadMbps,
+          uploadMbps: plano.uploadMbps,
+          precoMensal: plano.precoMensal.toString(),
+          adesao: plano.adesao ? plano.adesao.toString() : '0.00',
+          tecnologia: plano.tecnologia,
+          popular: plano.popular ?? false,
+          recursos: plano.recursos || [],
+          ativo: true
+        });
+        return plano;
+      } catch (err: any) {
+        if (env.NODE_ENV === 'production') {
+          throw new Error(`Falha no banco ao criar plano: ${err.message}`);
+        }
+        console.warn('[PlanosRepository] Falha ao persistir plano no Postgres:', err.message);
+      }
+    }
+
+    if (env.NODE_ENV === 'production') {
+      throw new Error('Banco de dados PostgreSQL indisponível em produção.');
+    }
+
+    this.fallbackPlanos.push({ ...plano, instanceId });
+    return plano;
+  }
+
   private mapToDomain(row: PlanoDb): Plano {
     return {
       id: row.id,

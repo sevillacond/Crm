@@ -50,32 +50,42 @@ Diferente de CRMs genéricos, o Enlace CRM integra nativamente:
 
 ---
 
-## 3. Estado Real da Arquitetura & Governança (Auditoria P0.5)
+## 3. Estado Real da Arquitetura & Governança (Auditoria P0.12 & P0.13)
 
-O Enlace CRM segue separação arquitetural estrita entre **módulos reais de produção**, **gateways de integração (adapters)** e **dados de demonstração/sandbox (mocks)**:
+O Enlace CRM segue separação arquitetural estrita entre **módulos reais de produção**, **gateways de integração (adapters)**, **dados de sandbox/mock** e **módulos planejados**:
 
-### 3.1 O que é REAL (Implementação de Produção)
+### 3.1 Tabela de Classificação de Módulos
+
+| Módulo | Estado | Observação |
+| :--- | :--- | :--- |
+| **CRM Core** | `REAL` | Implementado com Vite SPA + Express e isolamento estrito por `instanceId`. |
+| **PostgreSQL 16** | `REAL` | Implementado com Drizzle ORM, migrações versionadas e constraints compostas cross-instance. |
+| **RBAC** | `REAL` | Implementado com matriz de permissões positiva e negativa por perfil (`ActorContext`). |
+| **Auditoria** | `REAL` | Implementado com hash chain SHA-256 linear imutável e advisory locks. |
+| **MaIA (Motor IA)** | `REAL` | Governada por Policy Engine com níveis de autonomia N0 a N4 e Fail-Closed. |
+| **Aprovação MaIA** | `REAL` | Persistente no PostgreSQL com máquina de estados atômica e proteção anti-tamper (`paramsHash`). |
+| **SGP (IXC/MK-Auth/Voalle)** | `ADAPTER` | Requer configuração de credenciais da API. Nunca fabrica clientes fictícios quando não configurado. |
+| **WhatsApp** | `ADAPTER` | Requer integração com Meta Cloud API (`WHATSAPP_API_TOKEN` e `PHONE_NUMBER_ID`). |
+| **Asterisk** | `ADAPTER` | Requer integração com PBX Asterisk via WebRTC WSS. Não declara status online sem conexão real. |
+| **Cobrança** | `ADAPTER` | Requer credenciais do gateway Pix/Bancário. Não declara status `PAGO` sem retorno oficial. |
+| **Viabilidade Técnica** | `MOCK` | Estimativa teórica simulada sandbox. Não utilizar como resultado real nem afirmar disponibilidade física de portas de CTO sem vistoria. |
+| **GIS** | `PLANNED/PARTIAL` | Visualização de coordenadas preliminar; motor georreferenciado completo planejado. |
+| **OLT / Telemetria PON** | `PLANNED/PARTIAL` | Diagnóstico óptico via SGP adapter; integração direta SNMP/SSH com chassis OLT planejada. |
+
+### 3.2 O que é REAL (Implementação de Produção)
 - **Autoridade Única PostgreSQL 16 + Drizzle**: PostgreSQL é a autoridade máxima de persistência. O cache em memória/Redis atua exclusivamente como otimização transitória (Fail-Closed na ausência do banco).
-- **Máquina de Estados de Aprovações MaIA**: Transições atômicas estritas (`PENDING_APPROVAL` -> `APPROVED`/`REJECTED` -> `EXECUTING` -> `EXECUTED`/`FAILED`). Verificação de concorrência com validação de `rowsAffected === 1`.
+- **Integridade Cross-Instance no PostgreSQL (P0.1)**: Constraints compostas de chave primária e estrangeira (`id + instance_id`) em `deals`, `contatos`, `planos`, `users`, `sessions`, `ordens_servico` e `maia_approval_requests`. O banco de dados impede em nível de schema que entidades de uma instância referenciem outra.
+- **Máquina de Estados de Aprovações MaIA (P0.2 & P0.3)**: Transições atômicas estritas (`PENDING_APPROVAL` -> `APPROVED`/`REJECTED` -> `EXECUTING` -> `EXECUTED`/`FAILED`). Verificação de concorrência com validação de `rowsAffected === 1` e proteção contra execução duplicada.
 - **Integridade Criptográfica (paramsHash)**: Hash SHA-256 canônico gerado na solicitação e revalidado na execução. Alterações nos parâmetros bloqueiam a execução imediatamente com `PARAMS_HASH_MISMATCH`.
 - **Governança & Três Identidades**: Preservação auditada de `requestedBy`, `resolvedBy` e `executedBy`. Nunca substitui identidade humana por identificadores genéricos.
 - **Expiração de Aprovações**: Campo `expiresAt` com bloqueio automático de aprovação e execução de solicitações expiradas.
 - **Policy Engine de Autonomia**: Níveis N0 (desativada) a N4 (autônoma). Persistência de `setNivel` gravada primeiro no PostgreSQL antes de invalidar/atualizar cache.
-- **Isolamento Absoluto por `instanceId`**: Todos os repositórios sensíveis (`contatos`, `deals`, `planos`, `ordensServico`, `auditoria`, `sessions`, `maiaApprovals`, `sgp`) exigem `instanceId` obrigatório, injetado exclusivamente pelo `ActorContext` do token JWT verificado.
-- **Integridade Relacional Cross-Instance**: Bloqueio transacional de entidades de instâncias distintas (ex: Deal na instância A tentando referenciar Contato ou Plano da instância B é rejeitado com 403).
+- **Isolamento Absoluto por `instanceId`**: Todos os repositórios sensíveis exigem `instanceId` obrigatório, injetado exclusivamente pelo `ActorContext` do token JWT verificado (o frontend pode exibir o ID mas jamais determina autorização).
 - **Trilha de Auditoria Encadeada**: Encadeamento linear de hash SHA-256 (`previousHash` -> `hashIntegridade`) com PostgreSQL advisory lock por `instanceId` contra bifurcação concorrente.
 - **Fail-Closed em Produção**: Indisponibilidade de PostgreSQL ou Redis bloqueia operações críticas sem fallbacks permissivos.
-
-### 3.2 O que é ADAPTER (Gateways Prontos para Homologação)
-- **Gateway SGP / ERP de Provedor**: Arquitetura padronizada (`SgpService` -> `ISgpAdapter`). Identifica explicitamente se a instância está em modo `REAL`, `ADAPTER`, `MOCK` ou `NOT_CONFIGURED`. Nunca fabrica clientes fictícios quando não configurada.
-- **Telefonia WebRTC / Asterisk SIP**: Interface para PBX Asterisk com suporte a softphone integrado, sinalização SIP e histórico de chamadas vinculado aos contatos.
-- **Gateway Pix / Pagamentos**: Geração de Pix Copia e Cola EMVCo padrão Banco Central com marcação `GATEWAY_PRODUCAO` ou `MOCK_SANDBOX`.
-- **WhatsApp Cloud API**: Adapter para envio de mensagens via Meta Cloud API com verificação de configuração ativa.
-- **Viabilidade Técnica**: Adapter desacoplado com simulação explícita de cobertura óptica identificada como `[MOCK_DEMO_SIMULADO]`.
-
-### 3.3 O que é MOCK / DEMO (Ambiente Local)
-- **Fixtures de Desenvolvimento**: Contratos de exemplo (`CTR-IXC-8821`, `CTR-MK-4412`) restritos à instância de desenvolvimento local `inst-dev-local-001`.
-- **Fallback Heurístico da MaIA**: Isolado e desativado em produção (`NODE_ENV=production`), operando apenas em modo local/teste e explicitamente marcado como `[MOCK/DEMO]`.
+- **Zero Dados Fictícios como Default (P0.4)**: Eliminação completa de fallbacks silenciosos como `13000-000`, `Campinas`, `SP` ou IDs de clientes/contratos demonstrativos em fluxos produtivos.
+- **CORS Estrito (P0.5)**: Variável `CORS_ORIGINS` estritamente obrigatória em produção, sem fallback permissivo para `localhost` ou `127.0.0.1`.
+- **Arquitetura Docker Unificada (P0.6 & P0.7)**: Build e runtime unificados em Bun (`oven/bun:1-alpine`) com lockfile determinístico (`bun.lock`), execução como usuário não-root `enlace:enlace`, signal handling (`SIGTERM`/`SIGINT`), graceful shutdown em 10s e bind de porta restrito ao localhost (`127.0.0.1:3000`) para integração com Traefik/Proxy Reverso.
 
 ---
 

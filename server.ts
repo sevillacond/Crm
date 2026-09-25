@@ -130,10 +130,36 @@ async function startServer() {
     });
   }
 
-  // 3. HTTP Listener
-  app.listen(PORT, '0.0.0.0', () => {
+  // 3. HTTP Listener & Graceful Shutdown (P0.6)
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`[Enlace-CRM] Servidor operacional na porta ${PORT} | PostgreSQL 16 Drizzle ORM`);
   });
+
+  const gracefulShutdown = async (signal: string) => {
+    console.log(`[Enlace-CRM] Sinal ${signal} recebido. Iniciando graceful shutdown...`);
+    server.close(async () => {
+      console.log('[Enlace-CRM] Servidor HTTP fechado. Encerrando conexões com banco e cache...');
+      try {
+        const { closeDatabaseConnection } = await import('./src/db/client.ts');
+        const { closeRedis } = await import('./src/shared/redis.ts');
+        await closeDatabaseConnection();
+        await closeRedis();
+        console.log('[Enlace-CRM] Conexões finalizadas com sucesso.');
+      } catch (err: any) {
+        console.error('[Enlace-CRM] Erro durante encerramento de conexões:', err.message);
+      }
+      process.exit(0);
+    });
+
+    // Timeout de segurança para evitar processo zumbi
+    setTimeout(() => {
+      console.error('[Enlace-CRM] Timeout de graceful shutdown (10s) excedido. Forçando encerramento.');
+      process.exit(1);
+    }, 10000).unref();
+  };
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 }
 
 startServer().catch((err) => {

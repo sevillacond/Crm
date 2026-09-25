@@ -14,8 +14,12 @@ services:
       dockerfile: Dockerfile
     container_name: enlace-telecom-crm
     restart: always
+    # P0.7: Em produção atrás de Traefik/Proxy Reverso, a porta 3000 não deve ser exposta publicamente no 0.0.0.0 do host.
+    # O bind é restrito a 127.0.0.1 por padrão para desenvolvimento/acesso local seguro.
     ports:
-      - "3000:3000"
+      - "${APP_PORT_BINDING:-127.0.0.1:3000}:3000"
+    expose:
+      - "3000"
     environment:
       - NODE_ENV=production
       - PORT=3000
@@ -23,7 +27,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET é obrigatório em produção}
       - DATABASE_URL=postgresql://${POSTGRES_USER:-enlace_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD é obrigatório em produção}@postgres:5432/${POSTGRES_DB:-enlace_crm_db}?sslmode=disable
       - REDIS_URL=redis://redis:6379
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+      - CORS_ORIGINS=${CORS_ORIGINS:?CORS_ORIGINS é obrigatório em produção e não pode conter localhost (ex: https://crm.provedor.com.br)}
       - ADMIN_INITIAL_EMAIL=${ADMIN_INITIAL_EMAIL:?ADMIN_INITIAL_EMAIL é obrigatório em produção}
       - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:?ADMIN_INITIAL_PASSWORD é obrigatório em produção}
       - PROVIDER_CNPJ=${PROVIDER_CNPJ:?PROVIDER_CNPJ é obrigatório em produção}

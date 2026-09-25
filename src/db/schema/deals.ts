@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, varchar, integer, numeric, jsonb, index } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, varchar, integer, numeric, jsonb, index, unique, foreignKey } from 'drizzle-orm/pg-core';
 import { instancesTable } from './instances.ts';
 import { contatosTable } from './contatos.ts';
 import { planosTable } from './planos.ts';
@@ -28,6 +28,22 @@ export const dealsTable = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
   },
   (table) => ({
+    uqDealInstance: unique('uq_deals_id_instance').on(table.id, table.instanceId),
+    fkDealsContatoInstance: foreignKey({
+      name: 'fk_deals_contato_instance',
+      columns: [table.contatoId, table.instanceId],
+      foreignColumns: [contatosTable.id, contatosTable.instanceId]
+    }).onDelete('cascade'),
+    fkDealsPlanoInstance: foreignKey({
+      name: 'fk_deals_plano_instance',
+      columns: [table.planoId, table.instanceId],
+      foreignColumns: [planosTable.id, planosTable.instanceId]
+    }),
+    fkDealsUserInstance: foreignKey({
+      name: 'fk_deals_user_instance',
+      columns: [table.responsavelId, table.instanceId],
+      foreignColumns: [usersTable.id, usersTable.instanceId]
+    }),
     instanceIdx: index('idx_deals_instance').on(table.instanceId),
     contatoIdx: index('idx_deals_contato').on(table.contatoId),
     etapaIdx: index('idx_deals_etapa').on(table.etapa),

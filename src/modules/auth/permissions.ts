@@ -20,6 +20,7 @@ export type Permission =
   | 'usuarios:delete'
   | 'instancia:read'
   | 'instancia:update'
+  | 'cobranca:read'
   | 'viabilidade:consultar'
   | 'maia:use'
   | 'maia:execute'
@@ -46,6 +47,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'usuarios:delete',
     'instancia:read',
     'instancia:update',
+    'cobranca:read',
     'viabilidade:consultar',
     'maia:use',
     'maia:execute',
@@ -67,6 +69,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'auditoria:read',
     'usuarios:read',
     'instancia:read',
+    'cobranca:read',
     'viabilidade:consultar',
     'maia:use',
     'maia:execute',
@@ -81,6 +84,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'deals:update',
     'deals:stage_move',
     'planos:read',
+    'cobranca:read',
     'viabilidade:consultar',
     'maia:use',
     'maia:execute'

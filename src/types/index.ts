@@ -97,15 +97,18 @@ export interface Deal {
 
 export interface AuditLog {
   id: string;
+  instanceId?: string;
   timestamp: string;
   actorId: string;
   actorName: string;
   actorRole: Role;
   action: string;
-  entityType: 'DEAL' | 'CONTATO' | 'CONFIG' | 'AUTH' | 'VIABILIDADE' | 'MAIA_TOOL';
+  entityType: 'DEAL' | 'CONTATO' | 'CONFIG' | 'AUTH' | 'VIABILIDADE' | 'MAIA_TOOL' | string;
   entityId: string;
   details: string;
   isMaiaAction: boolean;
+  hashIntegridade?: string;
+  previousHash?: string;
 }
 
 export interface ViabilidadeConsulta {
