@@ -1,18 +1,17 @@
-import { maiaPolicyEngine } from './policyEngine.ts';
-import { executeMaiaTool } from './toolRegistry.ts';
-import { auditoriaService } from '../auditoria/auditoria.service.ts';
+import { maiaRuntime } from './runtime/maiaRuntime.ts';
 import { instancesService } from '../instances/instances.service.ts';
 import { planosService } from '../planos/planos.service.ts';
 import { contatosRepository } from '../contatos/contatos.repository.ts';
 import { dealsRepository } from '../deals/deals.repository.ts';
 import { ActorContext } from '../auth/actorContext.ts';
-import { getLlmProvider } from './llm/index.ts';
+import { maiaPolicyEngine } from './policyEngine.ts';
 
 export interface MaiaChatInput {
   prompt: string;
   dealId?: string;
   contatoId?: string;
   context?: any;
+  conversationId?: string;
 }
 
 export interface MaiaChatOutput {
@@ -22,6 +21,10 @@ export interface MaiaChatOutput {
   approvalId?: string;
   auditId?: string;
   nivelAutonomia: number;
+  conversationId?: string;
+  status?: string;
+  provider?: string;
+  model?: string;
 }
 
 class MaiaService {
@@ -38,7 +41,8 @@ class MaiaService {
     if (nivel === 0) {
       return {
         resposta: 'A MaIA está temporariamente desativada nesta instância por política do supervisor (N0).',
-        nivelAutonomia: 0
+        nivelAutonomia: 0,
+        status: 'BLOCKED'
       };
     }
 
@@ -46,8 +50,7 @@ class MaiaService {
     const instance = await instancesService.getInstance(actor.instanceId);
     const planos = await planosService.getAll(actor.instanceId);
 
-    // P0: PARTE 14 & 18: Acesso contextual seguro com menor privilégio
-    // NUNCA aceitar instanceId a partir do prompt ou context do payload
+    // P0: Menor privilégio: Acesso restrito e contextualizado dentro da instância do ator
     const targetContato = input.contatoId
       ? await contatosRepository.getById(input.contatoId, actor.instanceId)
       : null;
@@ -55,202 +58,42 @@ class MaiaService {
       ? await dealsRepository.getById(input.dealId, actor.instanceId)
       : null;
 
-    const systemContext = `
-Você é a MaIA (Módulo de Automação e Inteligência Artificial) do Enlace-CRM.
-Instância: ${instance.nomeFantasia} (Cidade Sede: ${instance.cidadeSede}-${instance.uf}).
-Governança: Nível ${nivel}. Opera sob menor privilégio.
-Planos disponíveis:
-${planos.map(p => `- ${p.nome}: R$ ${p.precoMensal.toFixed(2)}/mês (${p.downloadMbps}M down)`).join('\n')}
-
-${targetContato ? `Contato em foco: ${targetContato.nome}, Tel: ${targetContato.telefone}, CEP: ${targetContato.cep}` : ''}
-${targetDeal ? `Negócio em foco: ${targetDeal.titulo}, Etapa: ${targetDeal.etapa}, Valor: R$ ${targetDeal.valorMensal}/mês` : ''}
-
-REGRAS MANDATÓRIAS DE GOVERNANÇA (ISP):
-1. NUNCA afirme ou declare portas físicas disponíveis em CTOs sem vistoria técnica de campo.
-2. Toda consulta ou estimativa de viabilidade técnica no sistema opera atualmente em modo simulado (MOCK). Portanto, para qualquer resposta sobre viabilidade técnica, você DEVE incluir expressamente o aviso: "[AVISO DE GOVERNANÇA: Estimativa teórica simulada (MOCK). Sujeito à vistoria técnica presencial.]"
-`;
-
-    let aiResponseText = '';
-    let toolActionExecuted: any = null;
-    let pendingApprovalId: string | undefined;
-
-    // 1. Provider-Agnostic LLM Adapter (Gemini ou Adapter Futuro)
-    try {
-      const llm = getLlmProvider();
-      const generated = await llm.generateText(input.prompt, systemContext);
-      if (generated) {
-        aiResponseText = generated;
-      }
-    } catch (llmError: any) {
-      console.warn('[MaIA] LLM indisponível:', llmError?.message);
-    }
-
-    // 2. Fallback Heurístico Isolado (Apenas para Testes/Demo - Desativado em Produção)
-    if (!aiResponseText) {
-      if (process.env.NODE_ENV === 'production') {
-        aiResponseText = `[MaIA Governança] Modelo de Inteligência Artificial indisponível no momento. O fallback heurístico automático é estritamente desativado em produção para garantir que nenhuma inferência seja simulada sem autoridade do modelo.`;
-      } else {
-        const fallbackResult = await this.executeHeuristicDemoFallback(input, actor, targetContato, targetDeal, instance, nivel);
-        aiResponseText = fallbackResult.aiResponseText;
-        toolActionExecuted = fallbackResult.toolActionExecuted;
-        pendingApprovalId = fallbackResult.pendingApprovalId;
-      }
-    }
-
-    // P0.12: Garantir que qualquer resposta sobre viabilidade técnica nunca declare portas reais e sempre contenha identificação de MOCK/Simulação
-    const isViabilidade = /viabilidade|cto|cobertura|disponibilidade|cep/i.test(input.prompt);
-    if (isViabilidade) {
-      aiResponseText = aiResponseText.replace(/Portas disponíveis:\s*\d+/gi, 'Portas estimadas (simulação não-vinculante)');
-      if (!aiResponseText.includes('MOCK') && !aiResponseText.includes('simulada') && !aiResponseText.includes('Aviso')) {
-        aiResponseText += '\n\n[AVISO DE GOVERNANÇA: Estimativa teórica simulada (MOCK). Sujeito à vistoria técnica presencial.]';
-      }
-    }
-
-    // 3. Log Audit Trail for MaIA - Preserva a identidade do usuário solicitante
-    const auditLog = await auditoriaService.logEvent({
-      instanceId: actor.instanceId,
-      actorId: actor.userId,
-      actorName: actor.name,
-      actorRole: actor.role,
-      action: 'MAIA_INTERACTION_PROCESSED',
-      entityType: 'MAIA_TOOL',
-      entityId: input.dealId || input.contatoId || 'GENERAL',
-      details: `Interação MaIA solicitada por ${actor.name}: "${input.prompt.substring(0, 70)}...". Ferramenta: ${toolActionExecuted?.name || (pendingApprovalId ? 'PENDING_APPROVAL' : 'CONVERSACIONAL')}`,
-      isMaiaAction: true,
-      dadosPosteriores: { 
-        toolActionExecuted, 
-        pendingApprovalId, 
-        nivelAutonomia: nivel,
-        solicitanteOriginal: { userId: actor.userId, name: actor.name, role: actor.role }
-      }
-    });
+    // Delegar para o MaiaRuntime desacoplado e reutilizável
+    const result = await maiaRuntime.processTurn(
+      {
+        prompt: input.prompt,
+        conversationId: input.conversationId || input.context?.conversationId,
+        dealId: input.dealId,
+        contatoId: input.contatoId,
+        domainContext: {
+          contato: targetContato,
+          deal: targetDeal,
+          planos
+        },
+        instance: {
+          nomeFantasia: instance.nomeFantasia,
+          razaoSocial: instance.razaoSocial,
+          cidadeSede: instance.cidadeSede,
+          uf: instance.uf,
+          cnpj: instance.cnpj
+        },
+        context: input.context
+      },
+      actor
+    );
 
     return {
-      resposta: aiResponseText,
-      toolExecutada: toolActionExecuted?.name,
-      parametrosTool: toolActionExecuted,
-      approvalId: pendingApprovalId,
-      auditId: auditLog.id,
-      nivelAutonomia: nivel
+      resposta: result.resposta,
+      toolExecutada: result.toolExecutada,
+      parametrosTool: result.parametrosTool,
+      approvalId: result.approvalId,
+      auditId: result.auditId,
+      nivelAutonomia: result.nivelAutonomia,
+      conversationId: result.conversationId,
+      status: result.status,
+      provider: result.provider,
+      model: result.model
     };
-  }
-
-  /**
-   * Fallback Heurístico Isolado para Demonstração/Testes Locais.
-   * Não deve ser executado em ambiente de produção (desativado em NODE_ENV=production).
-   */
-  private async executeHeuristicDemoFallback(
-    input: MaiaChatInput,
-    actor: ActorContext,
-    targetContato: any,
-    targetDeal: any,
-    instance: any,
-    nivel: number
-  ): Promise<{ aiResponseText: string; toolActionExecuted?: any; pendingApprovalId?: string }> {
-    const p = (input.prompt || '').toLowerCase();
-    let aiResponseText = '';
-    let toolActionExecuted: any = null;
-    let pendingApprovalId: string | undefined;
-
-    if (p.includes('viabilidade') || p.includes('cep') || p.includes('cto')) {
-      const cepMatch = (input.prompt || '').match(/\d{5}-?\d{3}|\d{8}/);
-      const numMatch = (input.prompt || '').match(/(?:numero|número|n[ºo]|n\.)\s*(\d+)/i) || (input.prompt || '').match(/,\s*(\d+)/);
-      const cepReal = targetContato?.cep || input.context?.cep || (cepMatch ? cepMatch[0] : null);
-      const numeroReal = targetContato?.numero || input.context?.numero || (numMatch ? numMatch[1] : null);
-
-      if (!cepReal || !numeroReal) {
-        aiResponseText = '[MOCK/DEMO - Governança] Para simular a consulta de viabilidade técnica, é necessário informar o CEP e o número do imóvel.';
-      } else {
-        try {
-          const execResult = await executeMaiaTool({
-            toolName: 'consultar_viabilidade',
-            params: {
-              cep: cepReal,
-              numero: numeroReal,
-              contatoId: input.contatoId
-            },
-            actor
-          });
-
-          if (execResult.status === 'PENDING_APPROVAL') {
-            pendingApprovalId = execResult.approvalId;
-            aiResponseText = `[MOCK/DEMO - Governança] A consulta de viabilidade requer aprovação humana prévia (Solicitação: ${execResult.approvalId}).`;
-          } else {
-            toolActionExecuted = { name: 'consultar_viabilidade', ...execResult.data };
-            // P0.12: Se simulado (MOCK), NUNCA declarar portas físicas disponíveis
-            aiResponseText = `[MOCK/DEMO - Estimativa Simulada] Realizada estimativa teórica simulada (MOCK). Aviso: Integração GIS/SGP não conectada. Não é possível confirmar disponibilidade física de portas de CTO sem vistoria técnica de campo.`;
-          }
-        } catch (err: any) {
-          aiResponseText = `[MOCK/DEMO - Erro de Governança] ${err.message}`;
-        }
-      }
-    } else if (p.includes('proposta') || p.includes('plano') || p.includes('preço')) {
-      try {
-        const execResult = await executeMaiaTool({
-          toolName: 'recomendar_plano',
-          params: {},
-          actor
-        });
-
-        if (execResult.status === 'PENDING_APPROVAL') {
-          pendingApprovalId = execResult.approvalId;
-          aiResponseText = `[MOCK/DEMO - Governança] A recomendação de plano requer aprovação humana prévia (Solicitação: ${execResult.approvalId}).`;
-        } else {
-          toolActionExecuted = { name: 'recomendar_plano', ...execResult.data };
-          aiResponseText = `[MOCK/DEMO - Telecom] Com base no catálogo oficial da sua instância, o plano mais indicado é **${execResult.data.plano}** (R$ ${execResult.data.precoMensal.toFixed(2)}/mês).`;
-        }
-      } catch (err: any) {
-        aiResponseText = `[MOCK/DEMO - Erro de Governança] ${err.message}`;
-      }
-    } else if (p.includes('qualificar') || p.includes('score')) {
-      if (input.contatoId) {
-        try {
-          const execResult = await executeMaiaTool({
-            toolName: 'qualificar_lead',
-            params: { contatoId: input.contatoId },
-            actor
-          });
-
-          if (execResult.status === 'PENDING_APPROVAL') {
-            pendingApprovalId = execResult.approvalId;
-            aiResponseText = `[MOCK/DEMO - Governança] A qualificação do lead requer aprovação humana prévia (Solicitação: ${execResult.approvalId}).`;
-          } else {
-            toolActionExecuted = { name: 'qualificar_lead', ...execResult.data };
-            aiResponseText = `[MOCK/DEMO - Telecom] Lead qualificado com **Score ${execResult.data.score}/100** (${execResult.data.temperatura}). ${execResult.data.resumo}`;
-          }
-        } catch (err: any) {
-          aiResponseText = `[MOCK/DEMO - Erro de Governança] Falha na qualificação: ${err.message}`;
-        }
-      } else {
-        aiResponseText = `[MOCK/DEMO - Telecom] Nenhum contato selecionado nesta instância para qualificação.`;
-      }
-    } else if (p.includes('desconto')) {
-      if (!input.dealId) {
-        aiResponseText = '[MOCK/DEMO - Governança] É necessário associar um negócio (Deal) válido da instância para simular ou solicitar aplicação de desconto.';
-      } else {
-        try {
-          const execResult = await executeMaiaTool({
-            toolName: 'aplicar_desconto_excecao',
-            params: { dealId: input.dealId, desconto: 15 },
-            actor
-          });
-
-          if (execResult.status === 'PENDING_APPROVAL') {
-            pendingApprovalId = execResult.approvalId;
-            aiResponseText = `[MOCK/DEMO - Governança] A aplicação de desconto requer aprovação humana prévia do supervisor (Solicitação: ${execResult.approvalId}).`;
-          } else {
-            toolActionExecuted = { name: 'aplicar_desconto_excecao', ...execResult.data };
-            aiResponseText = `[MOCK/DEMO - Telecom] Simulação de desconto gerada com sucesso [AVISO: Modo Simulado/Demonstração]. Faturamento real não alterado.`;
-          }
-        } catch (err: any) {
-          aiResponseText = `[MOCK/DEMO - Erro de Governança] ${err.message}`;
-        }
-      }
-    } else {
-      aiResponseText = `[MOCK/DEMO - MaIA v3.8] Solicitação recebida sob governança N${nivel}. Dados da operadora ${instance.nomeFantasia} verificados.`;
-    }
-
-    return { aiResponseText, toolActionExecuted, pendingApprovalId };
   }
 }
 

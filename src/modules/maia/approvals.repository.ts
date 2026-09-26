@@ -259,6 +259,9 @@ class ApprovalsRepository {
     if (existing.expiresAt && new Date(existing.expiresAt).getTime() < Date.now()) {
       throw new Error(`Solicitação de aprovação ${id} expirou e não pode ser aprovada.`);
     }
+    if (existing.requestedBy.userId === reviewer.userId && process.env.ALLOW_SELF_APPROVAL !== 'true') {
+      throw new Error('SELF_APPROVAL_PROHIBITED: Segregação de funções violada: o operador solicitante não pode aprovar a própria requisição.');
+    }
 
     if (isDbConnected()) {
       try {

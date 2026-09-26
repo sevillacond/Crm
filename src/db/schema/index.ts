@@ -11,3 +11,4 @@ export * from './auditEvents.ts';
 export * from './maiaApprovals.ts';
 export * from './calls.ts';
 export * from './cobrancas.ts';
+export * from './maiaConversations.ts';

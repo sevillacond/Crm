@@ -2,6 +2,9 @@ import { Router, Request, Response } from 'express';
 import { maiaService } from '../../modules/maia/maia.service.ts';
 import { maiaPolicyEngine, MaiaNivelAutonomia } from '../../modules/maia/policyEngine.ts';
 import { maiaApprovalsRepository } from '../../modules/maia/approvals.repository.ts';
+import { toolGateway } from '../../modules/maia/gateway/toolGateway.ts';
+import { aiRouter } from '../../modules/maia/router/aiRouter.ts';
+import { maiaMemoryRepository } from '../../modules/maia/memory/memory.repository.ts';
 import {
   approveToolApproval,
   rejectToolApproval,
@@ -25,11 +28,14 @@ router.get(
   async (req: Request, res: Response) => {
     try {
       const nivel = await maiaPolicyEngine.loadNivelForInstance(req.actor!.instanceId);
+      const routerStatus = await aiRouter.getStatus();
+
       res.json({
         nivelAutonomia: nivel,
-        versao: 'MaIA v2.4 (Policy Engine & Fail-Closed Governance)',
+        versao: 'MaIA Runtime v3.0 (Enlace Transversal Agent Runtime)',
         status: nivel === 0 ? 'DESATIVADA' : 'OPERACIONAL',
-        instanceId: req.actor!.instanceId
+        instanceId: req.actor!.instanceId,
+        aiRouter: routerStatus
       });
     } catch (err: any) {
       if (err.message.includes('MAIA_POLICY_UNAVAILABLE')) {
@@ -41,6 +47,21 @@ router.get(
         });
         return;
       }
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  }
+);
+
+// GET /api/maia/tools (List tools available in Tool Gateway)
+router.get(
+  '/tools',
+  authMiddleware,
+  requirePermission('maia:use'),
+  async (_req: Request, res: Response) => {
+    try {
+      const tools = toolGateway.getToolsList();
+      res.json({ tools });
+    } catch (err: any) {
       res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
     }
   }
@@ -82,12 +103,15 @@ router.post(
   requirePermission('maia:use'),
   async (req: Request, res: Response, next) => {
     try {
-      const { prompt, dealId, contatoId } = req.body;
+      const { prompt, dealId, contatoId, conversationId, context } = req.body;
       if (!prompt) {
         res.status(400).json({ error: { code: 'MISSING_PROMPT', message: 'Prompt é obrigatório' } });
         return;
       }
-      const output = await maiaService.processPrompt({ prompt, dealId, contatoId }, req.actor!);
+      const output = await maiaService.processPrompt(
+        { prompt, dealId, contatoId, conversationId, context },
+        req.actor!
+      );
       res.json(output);
     } catch (err: any) {
       if (err.message && err.message.includes('MAIA_POLICY_UNAVAILABLE')) {
@@ -99,6 +123,63 @@ router.post(
         });
         return;
       }
+      next(err);
+    }
+  }
+);
+
+// GET /api/maia/conversations
+router.get(
+  '/conversations',
+  authMiddleware,
+  requirePermission('maia:use'),
+  async (req: Request, res: Response, next) => {
+    try {
+      const conversations = await maiaMemoryRepository.listConversations(
+        req.actor!.instanceId,
+        req.actor!.userId
+      );
+      res.json({ conversations });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// POST /api/maia/conversations
+router.post(
+  '/conversations',
+  authMiddleware,
+  requirePermission('maia:use'),
+  async (req: Request, res: Response, next) => {
+    try {
+      const { title, dealId, contatoId, metadata } = req.body;
+      const conv = await maiaMemoryRepository.createConversation({
+        instanceId: req.actor!.instanceId,
+        userId: req.actor!.userId,
+        title,
+        dealId,
+        contatoId,
+        metadata
+      });
+      res.status(201).json(conv);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// GET /api/maia/conversations/:id/messages
+router.get(
+  '/conversations/:id/messages',
+  authMiddleware,
+  requirePermission('maia:use'),
+  async (req: Request, res: Response, next) => {
+    try {
+      const { id } = req.params;
+      const messages = await maiaMemoryRepository.getMessages(id, req.actor!.instanceId);
+      res.json({ messages });
+    } catch (err) {
       next(err);
     }
   }
@@ -137,7 +218,13 @@ router.post(
         res.json({ status: 'APPROVED', request: approved });
       }
     } catch (err: any) {
-      res.status(400).json({ error: { code: 'APPROVAL_FAILED', message: err.message } });
+      const isSelfApproval = err.message.includes('SELF_APPROVAL_PROHIBITED');
+      res.status(isSelfApproval ? 403 : 400).json({
+        error: {
+          code: isSelfApproval ? 'SELF_APPROVAL_PROHIBITED' : 'APPROVAL_FAILED',
+          message: err.message
+        }
+      });
     }
   }
 );

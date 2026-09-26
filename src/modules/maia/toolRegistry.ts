@@ -516,3 +516,90 @@ export const MAIA_TOOL_REGISTRY: Record<string, MaiaToolDefinition> = {
 };
 
 export * from './toolTypes.ts';
+export * from './gateway/index.ts';
+
+// Auto-registration in ToolGateway
+import { toolGateway } from './gateway/toolGateway.ts';
+import { z } from 'zod';
+
+toolGateway.registerTool({
+  name: 'consultar_viabilidade',
+  description: 'Consulta viabilidade técnica da rede FTTH GPON (modo simulado demo com disclaimer)',
+  category: 'SGP',
+  nivelMinimoAutonomia: 1,
+  requerAprovacaoHumana: false,
+  riskLevel: 'LOW',
+  mode: 'MOCK',
+  parametersSchema: z.object({
+    cep: z.string().min(1, 'CEP é obrigatório'),
+    numero: z.string().min(1, 'Número do imóvel é obrigatório'),
+    bairro: z.string().optional(),
+    contatoId: z.string().optional()
+  }),
+  execute: RAW_TOOL_IMPLEMENTATIONS.consultar_viabilidade
+});
+
+toolGateway.registerTool({
+  name: 'recomendar_plano',
+  description: 'Analisa o catálogo de planos da operadora e sugere a melhor opção custo-benefício',
+  category: 'CRM',
+  nivelMinimoAutonomia: 1,
+  requerAprovacaoHumana: false,
+  riskLevel: 'LOW',
+  mode: 'REAL',
+  execute: RAW_TOOL_IMPLEMENTATIONS.recomendar_plano
+});
+
+toolGateway.registerTool({
+  name: 'qualificar_lead',
+  description: 'Calcula o score de propensão de fechamento e temperatura do lead com validação de instância',
+  category: 'CRM',
+  nivelMinimoAutonomia: 2,
+  requerAprovacaoHumana: false,
+  riskLevel: 'MEDIUM',
+  mode: 'REAL',
+  parametersSchema: z.object({
+    contatoId: z.string().min(1, 'contatoId é obrigatório')
+  }),
+  execute: RAW_TOOL_IMPLEMENTATIONS.qualificar_lead
+});
+
+toolGateway.registerTool({
+  name: 'aplicar_desconto_excecao',
+  description: 'Aplica desconto de exceção em negociação (requer aprovação humana obrigatória)',
+  category: 'FINANCEIRO',
+  nivelMinimoAutonomia: 3,
+  requerAprovacaoHumana: true,
+  riskLevel: 'CRITICAL',
+  mode: 'MOCK',
+  parametersSchema: z.object({
+    dealId: z.string().min(1, 'dealId é obrigatório'),
+    desconto: z.number().optional()
+  }),
+  execute: RAW_TOOL_IMPLEMENTATIONS.aplicar_desconto_excecao
+});
+
+toolGateway.registerTool({
+  name: 'consultar_sgp_cliente',
+  description: 'Consulta status de conexão, IP PPPoE, ONT e faturas abertas no SGP integrado (IXC / MK-Auth / Voalle)',
+  category: 'SGP',
+  nivelMinimoAutonomia: 1,
+  requerAprovacaoHumana: false,
+  riskLevel: 'LOW',
+  mode: 'REAL',
+  execute: RAW_TOOL_IMPLEMENTATIONS.consultar_sgp_cliente
+});
+
+toolGateway.registerTool({
+  name: 'desbloquear_em_confianca',
+  description: 'Executa desbloqueio temporário de 48h em confiança para cliente bloqueado por inadimplência',
+  category: 'SGP',
+  nivelMinimoAutonomia: 2,
+  requerAprovacaoHumana: false,
+  riskLevel: 'HIGH',
+  mode: 'REAL',
+  parametersSchema: z.object({
+    contratoId: z.string().min(1, 'contratoId é obrigatório')
+  }),
+  execute: RAW_TOOL_IMPLEMENTATIONS.desbloquear_em_confianca
+});

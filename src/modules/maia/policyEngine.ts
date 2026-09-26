@@ -4,11 +4,14 @@ import { env } from '../../config/env.ts';
 
 export type MaiaNivelAutonomia = 0 | 1 | 2 | 3 | 4;
 
+export type ToolRiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
 export interface PolicyCheckResult {
   permitido: boolean;
   motivo?: string;
   requerAprovacaoHumana?: boolean;
   nivel: MaiaNivelAutonomia;
+  riskLevel?: ToolRiskLevel;
 }
 
 interface CacheEntry {
@@ -110,44 +113,76 @@ export class MaiaPolicyEngine {
     this.instancePolicyCache.set(instanceId, { nivel, cachedAt: Date.now() });
   }
 
+  /**
+   * Avaliação de política e risco para execução de ferramenta.
+   * Enforça segregação por Risk Level (LOW, MEDIUM, HIGH, CRITICAL) e níveis N0..N4.
+   */
   async evaluateToolExecution(
     toolName: string,
     instanceId: string,
-    toolConfig?: { nivelMinimoAutonomia: number; requerAprovacaoHumana: boolean }
+    toolConfig?: {
+      nivelMinimoAutonomia: number;
+      requerAprovacaoHumana: boolean;
+      riskLevel?: ToolRiskLevel;
+    }
   ): Promise<PolicyCheckResult> {
     const nivel = await this.loadNivelForInstance(instanceId);
 
-    // N0 - Desativada
+    // N0 - Desativada completamente
     if (nivel === 0) {
       return {
         permitido: false,
         motivo: 'MaIA está desativada na política desta instância (Nível 0).',
-        nivel: 0
+        nivel: 0,
+        riskLevel: toolConfig?.riskLevel || 'LOW'
       };
     }
 
     const nivelMinimo = toolConfig?.nivelMinimoAutonomia ?? 1;
-    const requerAprovacao = toolConfig?.requerAprovacaoHumana ?? false;
+    const requerAprovacaoConfig = toolConfig?.requerAprovacaoHumana ?? false;
+    const riskLevel: ToolRiskLevel = toolConfig?.riskLevel ?? (requerAprovacaoConfig ? 'HIGH' : 'LOW');
 
+    // 1. Nível mínimo insuficiente
     if (nivel < nivelMinimo) {
       return {
         permitido: false,
         motivo: `Ferramenta requer nível mínimo N${nivelMinimo}. Instância configurada para N${nivel}.`,
-        nivel
+        nivel,
+        riskLevel
       };
     }
 
-    // P0: Aprovação humana obrigatória
-    if (requerAprovacao || (nivel === 3 && requerAprovacao)) {
+    // 2. CRITICAL Risk: Operações financeiras, cadastrais de alto impacto ou rescisão
+    // NUNCA executam sem aprovação humana expressa, mesmo em N4!
+    if (riskLevel === 'CRITICAL') {
+      return {
+        permitido: true,
+        requerAprovacaoHumana: true,
+        motivo: `Ação classificada como CRITICAL RISK (${toolName}). Exige aprovação humana obrigatória em qualquer nível de autonomia.`,
+        nivel,
+        riskLevel
+      };
+    }
+
+    // 3. Regra de Nível N3: Ações de alteração de estado ou HIGH risk requerem confirmação humana
+    if (requerAprovacaoConfig || (nivel === 3 && (riskLevel === 'HIGH' || requerAprovacaoConfig))) {
       return {
         permitido: true,
         requerAprovacaoHumana: true,
         motivo: 'Ação requer aprovação humana prévia do operador.',
-        nivel
+        nivel,
+        riskLevel
       };
     }
 
-    return { permitido: true, requerAprovacaoHumana: false, nivel };
+    // 4. Nível N4 com HIGH risk não configurado como crítico:
+    // Se o toolConfig especificou requerAprovacaoHumana: false, em N4 executa autonomamente
+    return {
+      permitido: true,
+      requerAprovacaoHumana: false,
+      nivel,
+      riskLevel
+    };
   }
 }
 
