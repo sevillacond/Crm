@@ -273,6 +273,32 @@ class SgpService {
       qualidadeOptica: (contract.sinalRxDbm && contract.sinalRxDbm > -24) ? 'EXCELENTE' : 'ATENCAO'
     };
   }
+
+  public seedMockContractsForInstance(instanceId: string): string {
+    const contratoId = `CTR-TEST-${instanceId.substring(0, 8)}`;
+    const contracts: SgpContractMock[] = [
+      {
+        contratoId,
+        clienteId: 'CLI-999',
+        nomeCliente: 'Cliente Teste Governança',
+        cpfCnpj: '111.222.333-44',
+        planoContratado: 'Fibra 500 Mega',
+        statusConexao: 'BLOQUEADO',
+        ipPppoe: '100.64.99.1',
+        macOnt: '60:32:B1:00:11:22',
+        sinalRxDbm: -20.5,
+        uptimeHoras: 0,
+        faturasAbertas: 1,
+        diasInadimplente: 10,
+        desbloqueioConfiancaDisponivel: true,
+        provedorSgp: 'IXC',
+        origem: 'MOCK',
+        isMock: true
+      }
+    ];
+    this.contractsByInstance.set(instanceId, contracts);
+    return contratoId;
+  }
 }
 
 export const sgpService = new SgpService();

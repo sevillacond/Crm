@@ -8,8 +8,7 @@ import { maiaMemoryRepository } from '../../modules/maia/memory/memory.repositor
 import {
   approveToolApproval,
   rejectToolApproval,
-  executeApprovedTool,
-  approveAndExecuteTool
+  executeApprovedTool
 } from '../../modules/maia/toolRegistry.ts';
 import { authMiddleware } from '../middlewares/auth.middleware.ts';
 import { requirePermission } from '../middlewares/rbac.middleware.ts';
@@ -185,15 +184,21 @@ router.get(
   }
 );
 
-// GET /api/maia/approvals (List pending human approvals for the instance)
+// GET /api/maia/approvals (List active human approvals for the instance)
 router.get(
   '/approvals',
   authMiddleware,
   requirePermission('maia:use'),
   async (req: Request, res: Response, next) => {
     try {
-      const pending = await maiaApprovalsRepository.listPending(req.actor!.instanceId);
-      res.json({ approvals: pending });
+      const statusQuery = req.query.status as string;
+      let list;
+      if (statusQuery === 'PENDING_APPROVAL') {
+        list = await maiaApprovalsRepository.listPending(req.actor!.instanceId);
+      } else {
+        list = await maiaApprovalsRepository.listActive(req.actor!.instanceId);
+      }
+      res.json({ approvals: list });
     } catch (err) {
       next(err);
     }
@@ -201,6 +206,7 @@ router.get(
 );
 
 // POST /api/maia/approvals/:id/approve (Requires maia:configure or supervisor/admin role)
+// P0: Aprovação e Execução são estritamente separadas. Auto-execute (execute=true) eliminado.
 router.post(
   '/approvals/:id/approve',
   authMiddleware,
@@ -208,17 +214,10 @@ router.post(
   async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const autoExecute = req.query.execute === 'true';
-
-      if (autoExecute) {
-        const result = await approveAndExecuteTool(id, req.actor!);
-        res.json(result);
-      } else {
-        const approved = await approveToolApproval(id, req.actor!);
-        res.json({ status: 'APPROVED', request: approved });
-      }
+      const approved = await approveToolApproval(id, req.actor!);
+      res.json({ status: 'APPROVED', request: approved });
     } catch (err: any) {
-      const isSelfApproval = err.message.includes('SELF_APPROVAL_PROHIBITED');
+      const isSelfApproval = err.message.includes('SELF_APPROVAL_PROHIBITED') || err.message.includes('SEPARATION_OF_DUTIES_VIOLATION');
       res.status(isSelfApproval ? 403 : 400).json({
         error: {
           code: isSelfApproval ? 'SELF_APPROVAL_PROHIBITED' : 'APPROVAL_FAILED',
@@ -240,7 +239,15 @@ router.post(
       const result = await executeApprovedTool(id, req.actor!);
       res.json(result);
     } catch (err: any) {
-      res.status(400).json({ error: { code: 'EXECUTION_FAILED', message: err.message } });
+      const isSoD = err.message.includes('SEPARATION_OF_DUTIES_VIOLATION');
+      const isPolicyFail = err.message.includes('POLICY_REVALIDATION_FAILED');
+      const isTampered = err.message.includes('PARAMS_HASH_MISMATCH');
+      res.status(isSoD ? 403 : (isPolicyFail || isTampered ? 422 : 400)).json({
+        error: {
+          code: isSoD ? 'SEPARATION_OF_DUTIES_VIOLATION' : (isPolicyFail ? 'POLICY_REVALIDATION_FAILED' : (isTampered ? 'PARAMS_HASH_MISMATCH' : 'EXECUTION_FAILED')),
+          message: err.message
+        }
+      });
     }
   }
 );

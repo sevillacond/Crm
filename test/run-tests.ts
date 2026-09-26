@@ -1752,6 +1752,187 @@ async function main() {
     assert(viabResult.data.aviso.includes('MOCK/DEMO'), 'Deve conter aviso explícito de MOCK/DEMO');
   });
 
+  // ==========================================
+  // SUÍTE 13: HARDENING DA MaIA — SoD, POLICY REVALIDATION & TOOL GATEWAY
+  // ==========================================
+
+  await runTest('13.1 (P0 Desbloqueio CRITICAL) desbloquear_em_confianca é CRITICAL e sempre exige aprovação mesmo em N4', async () => {
+    const { toolGateway } = await import('../src/modules/maia/gateway/toolGateway.ts');
+    const { sgpService } = await import('../src/modules/sgp/sgp.service.ts');
+    const instId = `inst_crit_desb_${Date.now()}`;
+    await instancesRepository.update(instId, { maiaNivelAutonomia: 4 });
+
+    const contratoId = sgpService.seedMockContractsForInstance(instId);
+    const actor = createTestActor('usr_atendente_crit', instId, 'ATENDENTE', 'Atendente N4');
+
+    const toolDef = toolGateway.getTool('desbloquear_em_confianca');
+    assert.ok(toolDef, 'Ferramenta deve estar registrada no Tool Gateway');
+    assert.strictEqual(toolDef.riskLevel, 'CRITICAL', 'Risco deve ser CRITICAL');
+    assert.strictEqual(toolDef.nivelMinimoAutonomia, 3, 'Nível mínimo deve ser 3');
+    assert.strictEqual(toolDef.requerAprovacaoHumana, true, 'Deve requerer aprovação humana');
+    assert.strictEqual(toolDef.requiresSeparationOfDuties, true, 'Deve requerer Segregação de Funções');
+
+    // Execução pelo Tool Gateway em N4 deve ser suspensa com PENDING_APPROVAL
+    const res = await toolGateway.executeTool({
+      toolName: 'desbloquear_em_confianca',
+      params: { contratoId },
+      actor
+    });
+
+    assert.strictEqual(res.status, 'PENDING_APPROVAL', 'CRITICAL nunca executa autonomamente');
+    assert.ok(res.approvalId, 'Deve gerar approvalId');
+  });
+
+  await runTest('13.2 (P0 Separation of Duties) Segregação estrita de funções: Solicitante !== Aprovador !== Executor', async () => {
+    const { sgpService } = await import('../src/modules/sgp/sgp.service.ts');
+    const instId = `inst_sod_${Date.now()}`;
+    await instancesRepository.update(instId, { maiaNivelAutonomia: 3 });
+
+    const contratoId = sgpService.seedMockContractsForInstance(instId);
+    const solicitante = createTestActor('usr_solicitante_sod', instId, 'ATENDENTE', 'Atendente Solicitante');
+    const aprovador = createTestActor('usr_aprovador_sod', instId, 'SUPERVISOR', 'Supervisor Aprovador');
+    const executor = createTestActor('usr_executor_sod', instId, 'TECNICO', 'Técnico Executor');
+
+    const approvalReq = await maiaApprovalsRepository.createRequest({
+      instanceId: instId,
+      toolName: 'desbloquear_em_confianca',
+      params: { contratoId },
+      requestedBy: {
+        userId: solicitante.userId,
+        name: solicitante.name,
+        role: solicitante.role
+      },
+      policyVersion: 'v3',
+      autonomyLevel: 3,
+      riskLevel: 'CRITICAL',
+      toolPolicySnapshot: {
+        toolName: 'desbloquear_em_confianca',
+        nivelMinimoAutonomia: 3,
+        requerAprovacaoHumana: true,
+        riskLevel: 'CRITICAL',
+        requiresSeparationOfDuties: true,
+        mode: 'REAL'
+      }
+    });
+
+    // 1. Solicitante tenta aprovar a própria requisição -> BLOQUEADO
+    await assert.rejects(async () => {
+      await approveToolApproval(approvalReq.id, solicitante);
+    }, /SELF_APPROVAL_PROHIBITED/);
+
+    // 2. Supervisor aprova -> SUCESSO (APPROVED)
+    const approved = await approveToolApproval(approvalReq.id, aprovador);
+    assert.strictEqual(approved.status, 'APPROVED');
+
+    // 3. Supervisor que aprovou tenta executar -> BLOQUEADO (SoD violation)
+    await assert.rejects(async () => {
+      await executeApprovedTool(approvalReq.id, aprovador);
+    }, /SEPARATION_OF_DUTIES_VIOLATION/);
+
+    // 4. Solicitante tenta executar diretamente -> BLOQUEADO (SoD violation)
+    await assert.rejects(async () => {
+      await executeApprovedTool(approvalReq.id, solicitante);
+    }, /SEPARATION_OF_DUTIES_VIOLATION/);
+
+    // 5. Terceiro operador independente (executor) executa -> SUCESSO (EXECUTED)
+    const executed = await executeApprovedTool(approvalReq.id, executor);
+    assert.strictEqual(executed.status, 'EXECUTED');
+    assert.strictEqual(executed.data.sucesso, true);
+    assert.strictEqual(executed.data.novoStatus, 'CONECTADO');
+  });
+
+  await runTest('13.3 (P0 Revalidação de Política) Rebaixamento de autonomia pós-aprovação bloqueia execução', async () => {
+    const { sgpService } = await import('../src/modules/sgp/sgp.service.ts');
+    const instId = `inst_reval_${Date.now()}`;
+    await maiaPolicyEngine.setNivel(3, instId);
+
+    const contratoId = sgpService.seedMockContractsForInstance(instId);
+    const solicitante = createTestActor('usr_solic_reval', instId, 'ATENDENTE', 'Operador Solicitante');
+    const aprovador = createTestActor('usr_aprov_reval', instId, 'SUPERVISOR', 'Supervisor Aprovador');
+    const executor = createTestActor('usr_exec_reval', instId, 'TECNICO', 'Técnico Executor');
+
+    const approvalReq = await maiaApprovalsRepository.createRequest({
+      instanceId: instId,
+      toolName: 'desbloquear_em_confianca',
+      params: { contratoId },
+      requestedBy: {
+        userId: solicitante.userId,
+        name: solicitante.name,
+        role: solicitante.role
+      },
+      policyVersion: 'v3',
+      autonomyLevel: 3,
+      riskLevel: 'CRITICAL',
+      toolPolicySnapshot: {
+        toolName: 'desbloquear_em_confianca',
+        nivelMinimoAutonomia: 3,
+        requerAprovacaoHumana: true,
+        riskLevel: 'CRITICAL',
+        requiresSeparationOfDuties: true,
+        mode: 'REAL'
+      }
+    });
+
+    await approveToolApproval(approvalReq.id, aprovador);
+
+    // Supervisor altera a política da instância para N1 (inferior ao N3 exigido pela ferramenta)
+    await maiaPolicyEngine.setNivel(1, instId);
+
+    // Tentativa de execução agora deve falhar por revalidação de política
+    await assert.rejects(async () => {
+      await executeApprovedTool(approvalReq.id, executor);
+    }, /POLICY_REVALIDATION_FAILED/);
+
+    // Restaurar política para N3
+    await maiaPolicyEngine.setNivel(3, instId);
+
+    // Agora a execução deve passar na revalidação e concluir
+    const res = await executeApprovedTool(approvalReq.id, executor);
+    assert.strictEqual(res.status, 'EXECUTED');
+  });
+
+  await runTest('13.4 (P0 Revalidação de Política) MaIA desativada (N0) pós-aprovação bloqueia execução', async () => {
+    const instId = `inst_reval_n0_${Date.now()}`;
+    await maiaPolicyEngine.setNivel(3, instId);
+
+    const solicitante = createTestActor('usr_s_n0', instId, 'ATENDENTE', 'Solicitante');
+    const aprovador = createTestActor('usr_a_n0', instId, 'SUPERVISOR', 'Aprovador');
+
+    const approvalReq = await maiaApprovalsRepository.createRequest({
+      instanceId: instId,
+      toolName: 'aplicar_desconto_excecao',
+      params: { dealId: 'deal_n0', desconto: 10 },
+      requestedBy: { userId: solicitante.userId, name: solicitante.name, role: solicitante.role }
+    });
+
+    await approveToolApproval(approvalReq.id, aprovador);
+
+    // Desativar MaIA (N0)
+    await maiaPolicyEngine.setNivel(0, instId);
+
+    await assert.rejects(async () => {
+      await executeApprovedTool(approvalReq.id, aprovador);
+    }, /POLICY_REVALIDATION_FAILED/);
+  });
+
+  await runTest('13.5 (P0 Unificação no Tool Gateway) executeMaiaTool delega estritamente ao Tool Gateway', async () => {
+    const { toolGateway } = await import('../src/modules/maia/gateway/toolGateway.ts');
+    const { executeMaiaTool } = await import('../src/modules/maia/toolRegistry.ts');
+
+    const instId = `inst_unif_${Date.now()}`;
+    await maiaPolicyEngine.setNivel(2, instId);
+    const actor = createTestActor('usr_test_unif', instId, 'ATENDENTE', 'Atendente Unificação');
+
+    // Chamar via executeMaiaTool com parâmetro inválido deve acionar validação Zod do Tool Gateway
+    await assert.rejects(async () => {
+      await executeMaiaTool({
+        toolName: 'qualificar_lead',
+        params: {},
+        actor
+      });
+    }, /INVALID_TOOL_PARAMETERS/);
+  });
+
   console.log('\n------------------------------------------------------');
   console.log(`Resultado Final: ${passedCount} passou, ${failedCount} falhou.`);
   console.log('------------------------------------------------------\n');

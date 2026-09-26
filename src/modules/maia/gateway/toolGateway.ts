@@ -27,6 +27,7 @@ export class ToolGateway {
     nivelMinimoAutonomia: number;
     requerAprovacaoHumana: boolean;
     riskLevel: string;
+    requiresSeparationOfDuties: boolean;
     mode: string;
   }> {
     return Array.from(this.registry.values()).map(t => ({
@@ -36,6 +37,7 @@ export class ToolGateway {
       nivelMinimoAutonomia: t.nivelMinimoAutonomia,
       requerAprovacaoHumana: t.requerAprovacaoHumana,
       riskLevel: t.riskLevel,
+      requiresSeparationOfDuties: t.requiresSeparationOfDuties ?? false,
       mode: t.mode
     }));
   }
@@ -104,7 +106,17 @@ export class ToolGateway {
           name: actor.name,
           role: actor.role
         },
-        policyVersion: `v${policyCheck.nivel}`
+        policyVersion: `v${policyCheck.nivel}`,
+        autonomyLevel: policyCheck.nivel,
+        riskLevel: toolDef.riskLevel,
+        toolPolicySnapshot: {
+          toolName: toolDef.name,
+          nivelMinimoAutonomia: toolDef.nivelMinimoAutonomia,
+          requerAprovacaoHumana: toolDef.requerAprovacaoHumana,
+          riskLevel: toolDef.riskLevel,
+          requiresSeparationOfDuties: toolDef.requiresSeparationOfDuties ?? false,
+          mode: toolDef.mode
+        }
       });
 
       await auditoriaService.logEvent({
@@ -121,6 +133,7 @@ export class ToolGateway {
           status: 'PENDING_APPROVAL',
           toolName,
           riskLevel: toolDef.riskLevel,
+          requiresSeparationOfDuties: toolDef.requiresSeparationOfDuties ?? false,
           paramsHash: approvalReq.paramsHash,
           requestedBy: approvalReq.requestedBy
         },

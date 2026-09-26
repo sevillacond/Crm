@@ -20,6 +20,16 @@ export interface MaiaApprovalRequest {
   params: any;
   paramsHash: string;
   policyVersion?: string;
+  autonomyLevel?: number;
+  riskLevel?: string;
+  toolPolicySnapshot?: {
+    toolName: string;
+    nivelMinimoAutonomia: number;
+    requerAprovacaoHumana: boolean;
+    riskLevel: string;
+    requiresSeparationOfDuties?: boolean;
+    mode?: string;
+  };
   requestedBy: {
     userId: string;
     name: string;
@@ -94,6 +104,9 @@ class ApprovalsRepository {
       role: string;
     };
     policyVersion?: string;
+    autonomyLevel?: number;
+    riskLevel?: string;
+    toolPolicySnapshot?: any;
     expiresAt?: Date | string;
     requestId?: string;
     correlationId?: string;
@@ -119,6 +132,9 @@ class ApprovalsRepository {
           params: data.params,
           paramsHash,
           policyVersion,
+          autonomyLevel: data.autonomyLevel !== undefined ? String(data.autonomyLevel) : null,
+          riskLevel: data.riskLevel || null,
+          toolPolicySnapshot: data.toolPolicySnapshot || null,
           requestedByUserId: data.requestedBy.userId,
           requestedByName: data.requestedBy.name,
           requestedByRole: data.requestedBy.role,
@@ -136,6 +152,9 @@ class ApprovalsRepository {
           params: data.params,
           paramsHash,
           policyVersion,
+          autonomyLevel: data.autonomyLevel,
+          riskLevel: data.riskLevel,
+          toolPolicySnapshot: data.toolPolicySnapshot,
           requestedBy: data.requestedBy,
           status: 'PENDING_APPROVAL',
           createdAt: createdAt.toISOString(),
@@ -162,6 +181,9 @@ class ApprovalsRepository {
       params: data.params,
       paramsHash,
       policyVersion,
+      autonomyLevel: data.autonomyLevel,
+      riskLevel: data.riskLevel,
+      toolPolicySnapshot: data.toolPolicySnapshot,
       requestedBy: data.requestedBy,
       status: 'PENDING_APPROVAL',
       createdAt: createdAt.toISOString(),
@@ -208,6 +230,41 @@ class ApprovalsRepository {
       return null;
     }
     return req;
+  }
+
+  async listActive(instanceId: string): Promise<MaiaApprovalRequest[]> {
+    if (!instanceId || instanceId.trim() === '') {
+      throw new Error('instanceId é obrigatório para listar aprovações.');
+    }
+
+    if (isDbConnected()) {
+      try {
+        const rows = await db
+          .select()
+          .from(maiaApprovalRequestsTable)
+          .where(and(
+            eq(maiaApprovalRequestsTable.instanceId, instanceId)
+          ))
+          .orderBy(desc(maiaApprovalRequestsTable.createdAt));
+
+        return rows
+          .map(r => this.mapToDomain(r))
+          .filter(r => r.status === 'PENDING_APPROVAL' || r.status === 'APPROVED');
+      } catch (err: any) {
+        if (env.NODE_ENV === 'production') {
+          throw new Error(`Falha ao listar aprovações no Postgres em produção: ${err.message}`);
+        }
+        console.warn('[ApprovalsRepository] Falha ao listar ativas no Postgres:', err.message);
+      }
+    }
+
+    if (env.NODE_ENV === 'production') {
+      throw new Error('PostgreSQL indisponível para listagem de aprovações em produção.');
+    }
+
+    return Array.from(this.fallbackRequests.values()).filter(
+      r => r.instanceId === instanceId && (r.status === 'PENDING_APPROVAL' || r.status === 'APPROVED')
+    );
   }
 
   async listPending(instanceId: string): Promise<MaiaApprovalRequest[]> {
@@ -605,6 +662,9 @@ class ApprovalsRepository {
       params: row.params,
       paramsHash: row.paramsHash,
       policyVersion: row.policyVersion,
+      autonomyLevel: (row as any).autonomyLevel ? Number((row as any).autonomyLevel) : undefined,
+      riskLevel: (row as any).riskLevel || undefined,
+      toolPolicySnapshot: (row as any).toolPolicySnapshot || undefined,
       requestedBy: {
         userId: row.requestedByUserId,
         name: row.requestedByName,

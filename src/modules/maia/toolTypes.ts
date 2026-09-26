@@ -5,7 +5,10 @@ export interface MaiaToolDefinition {
   description: string;
   nivelMinimoAutonomia: number;
   requerAprovacaoHumana: boolean;
+  riskLevel?: string;
+  requiresSeparationOfDuties?: boolean;
   execute: (params: any, actor: ActorContext) => Promise<any>;
+  /** @deprecated INTERNAL_ONLY / TEST_ONLY - Proibido acesso direto em rotas HTTP */
   _rawExecute?: (params: any, actor: ActorContext) => Promise<any>;
 }
 

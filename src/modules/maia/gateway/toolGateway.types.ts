@@ -22,6 +22,7 @@ export interface ToolDefinition<TParams = any, TResult = any> {
   nivelMinimoAutonomia: number;
   requerAprovacaoHumana: boolean;
   riskLevel: ToolRiskLevel;
+  requiresSeparationOfDuties?: boolean;
   parametersSchema?: z.ZodType<TParams>;
   mode: ToolOperationMode;
   execute: (params: TParams, actor: ActorContext, context?: any) => Promise<TResult>;

@@ -128,11 +128,10 @@ export const MaiaCentralView: React.FC<{
     }
   };
 
-  const handleApprove = async (id: string, executeNow: boolean = false) => {
+  const handleApprove = async (id: string) => {
     setActionLoadingId(id);
     try {
-      const url = `/api/maia/approvals/${id}/approve${executeNow ? '?execute=true' : ''}`;
-      const res = await authenticatedFetch(url, {
+      const res = await authenticatedFetch(`/api/maia/approvals/${id}/approve`, {
         method: 'POST'
       });
 
@@ -141,7 +140,7 @@ export const MaiaCentralView: React.FC<{
         throw new Error(err.error?.message || 'Falha na aprovação');
       }
 
-      notify(executeNow ? 'Ação aprovada e executada com sucesso!' : 'Ação aprovada. Pronta para execução.', 'success');
+      notify('Ação aprovada com sucesso. Pronta para execução.', 'success');
       await fetchData();
     } catch (err: any) {
       notify(`Erro: ${err.message}`, 'error');
@@ -343,6 +342,14 @@ export const MaiaCentralView: React.FC<{
                       <span className="text-xs font-bold text-white font-mono bg-purple-950 text-purple-300 px-2 py-0.5 rounded border border-purple-800">
                         {req.toolName}
                       </span>
+                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold ${
+                        req.status === 'APPROVED' ? 'bg-cyan-950 text-cyan-300 border border-cyan-800' :
+                        req.status === 'PENDING_APPROVAL' ? 'bg-amber-950 text-amber-300 border border-amber-800' :
+                        req.status === 'EXECUTED' ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' :
+                        'bg-slate-800 text-slate-300'
+                      }`}>
+                        {req.status === 'APPROVED' ? 'APROVADO (PRONTO P/ EXECUÇÃO)' : req.status}
+                      </span>
                       <span className="text-[11px] text-slate-400 font-mono">
                         ID: {req.id}
                       </span>
@@ -360,6 +367,12 @@ export const MaiaCentralView: React.FC<{
                       <span>Solicitante:</span>
                       <strong className="text-slate-200">{req.requestedBy.name} ({req.requestedBy.role})</strong>
                     </div>
+                    {req.resolvedBy && (
+                      <div className="text-slate-400 flex justify-between">
+                        <span>Aprovado por:</span>
+                        <strong className="text-cyan-300">{req.resolvedBy.name} ({req.resolvedBy.role})</strong>
+                      </div>
+                    )}
                     <div className="text-slate-400 flex justify-between">
                       <span>Integridade (SHA-256):</span>
                       <span className="text-cyan-400 truncate max-w-[200px]">{req.paramsHash}</span>
@@ -369,29 +382,44 @@ export const MaiaCentralView: React.FC<{
                     </div>
                   </div>
 
-                  {/* Ações do Supervisor */}
+                  {/* Ações do Supervisor - P0: Aprovação e Execução Segregadas */}
                   {canConfigure && (
                     <div className="flex items-center justify-end gap-2 pt-1">
-                      <button
-                        disabled={actionLoadingId === req.id}
-                        onClick={() => {
-                          setRejectModalId(req.id);
-                          setRejectReason('');
-                        }}
-                        className="px-3 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-800/60 text-xs font-bold cursor-pointer transition-colors flex items-center gap-1.5"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                        <span>Rejeitar</span>
-                      </button>
+                      {req.status === 'PENDING_APPROVAL' && (
+                        <>
+                          <button
+                            disabled={actionLoadingId === req.id}
+                            onClick={() => {
+                              setRejectModalId(req.id);
+                              setRejectReason('');
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-800/60 text-xs font-bold cursor-pointer transition-colors flex items-center gap-1.5"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                            <span>Rejeitar</span>
+                          </button>
 
-                      <button
-                        disabled={actionLoadingId === req.id}
-                        onClick={() => handleApprove(req.id, true)}
-                        className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold cursor-pointer transition-colors flex items-center gap-1.5 shadow-lg shadow-emerald-950"
-                      >
-                        <Check className="w-3.5 h-3.5" />
-                        <span>Aprovar &amp; Executar</span>
-                      </button>
+                          <button
+                            disabled={actionLoadingId === req.id}
+                            onClick={() => handleApprove(req.id)}
+                            className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer transition-colors flex items-center gap-1.5 shadow-lg shadow-indigo-950"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Aprovar</span>
+                          </button>
+                        </>
+                      )}
+
+                      {req.status === 'APPROVED' && (
+                        <button
+                          disabled={actionLoadingId === req.id}
+                          onClick={() => handleExecute(req.id)}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold cursor-pointer transition-colors flex items-center gap-1.5 shadow-lg shadow-emerald-950"
+                        >
+                          <Play className="w-3.5 h-3.5" />
+                          <span>Executar</span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

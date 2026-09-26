@@ -11,8 +11,8 @@ import {
 } from './approvals.repository.ts';
 import { MaiaToolDefinition, MaiaToolExecutionResult, ExecuteToolOptions } from './toolTypes.ts';
 
-// Internal raw implementations
-const RAW_TOOL_IMPLEMENTATIONS: Record<string, (params: any, actor: ActorContext) => Promise<any>> = {
+// Internal raw implementations (INTERNAL_ONLY - Proibido acesso direto sem passar pelo ToolGateway)
+const INTERNAL_TOOL_EXECUTORS: Record<string, (params: any, actor: ActorContext) => Promise<any>> = {
   consultar_viabilidade: async (params, actor) => {
     // P0: Não utilizar dados fictícios como fallback (13024-000 / 100)
     if (!params?.cep || typeof params.cep !== 'string' || params.cep.trim() === '') {
@@ -158,91 +158,27 @@ const RAW_TOOL_IMPLEMENTATIONS: Record<string, (params: any, actor: ActorContext
   }
 };
 
+/** @deprecated INTERNAL_ONLY / TEST_ONLY - Utilize toolGateway.executeTool() */
+export const RAW_TOOL_IMPLEMENTATIONS = INTERNAL_TOOL_EXECUTORS;
+
 /**
  * P0: Porta Única e Segura de Execução de Ferramentas da MaIA.
- * Nenhuma ferramenta executa sem passar pela validação rigorosa do Policy Engine.
+ * Delega diretamente ao ToolGateway oficial. Nenhuma ferramenta executa sem
+ * passar pelo ToolGateway -> Policy Engine -> Approvals -> Audit.
  */
 export async function executeMaiaTool(options: ExecuteToolOptions): Promise<MaiaToolExecutionResult> {
-  const { toolName, params, actor } = options;
-
-  // 1. Validar ActorContext e instanceId
-  if (!actor || !actor.instanceId) {
-    throw new Error('Acesso negado: Contexto de autorização ou instanceId ausente para executar ferramenta da MaIA.');
-  }
-
-  // 2. Localizar ferramenta no catálogo
-  const toolDef = TOOL_METADATA[toolName];
-  if (!toolDef) {
-    throw new Error(`Ferramenta '${toolName}' não registrada no Tool Registry seguro da MaIA.`);
-  }
-
-  // 3. Avaliar política persistente via Policy Engine (Fail-Closed)
-  const policyCheck = await maiaPolicyEngine.evaluateToolExecution(
-    toolName,
-    actor.instanceId,
-    {
-      nivelMinimoAutonomia: toolDef.nivelMinimoAutonomia,
-      requerAprovacaoHumana: toolDef.requerAprovacaoHumana
-    }
-  );
-
-  if (!policyCheck.permitido) {
-    throw new Error(`Execução da ferramenta '${toolName}' bloqueada pelo Policy Engine: ${policyCheck.motivo}`);
-  }
-
-  // 4. Verificação de necessidade de aprovação humana (P0: Human-in-the-loop obrigatório)
-  if (policyCheck.requerAprovacaoHumana) {
-    const approvalReq = await maiaApprovalsRepository.createRequest({
-      instanceId: actor.instanceId,
-      toolName,
-      params,
-      requestedBy: {
-        userId: actor.userId,
-        name: actor.name,
-        role: actor.role
-      },
-      policyVersion: `v${policyCheck.nivel}`
-    });
-
-    await auditoriaService.logEvent({
-      instanceId: actor.instanceId,
-      actorId: actor.userId,
-      actorName: actor.name,
-      actorRole: actor.role,
-      action: 'APPROVAL_REQUESTED',
-      entityType: 'MAIA_APPROVAL',
-      entityId: approvalReq.id,
-      details: `Execução da ferramenta '${toolName}' suspensa. Criada solicitação de aprovação ${approvalReq.id} com status PENDING_APPROVAL.`,
-      dadosPosteriores: {
-        approvalId: approvalReq.id,
-        status: 'PENDING_APPROVAL',
-        toolName,
-        paramsHash: approvalReq.paramsHash,
-        requestedBy: approvalReq.requestedBy
-      },
-      isMaiaAction: true
-    });
-
-    return {
-      status: 'PENDING_APPROVAL',
-      toolName,
-      approvalId: approvalReq.id,
-      message: 'Execução suspensa aguardando aprovação humana.'
-    };
-  }
-
-  // 5. Executar implementação interna da ferramenta
-  const rawFn = RAW_TOOL_IMPLEMENTATIONS[toolName];
-  if (!rawFn) {
-    throw new Error(`Implementação interna da ferramenta '${toolName}' não encontrada.`);
-  }
-
-  const result = await rawFn(params, actor);
+  const result = await toolGateway.executeTool({
+    toolName: options.toolName,
+    params: options.params,
+    actor: options.actor
+  });
 
   return {
-    status: 'EXECUTED',
-    toolName,
-    data: result
+    status: result.status as any,
+    toolName: result.toolName,
+    approvalId: result.approvalId,
+    data: result.data,
+    message: result.message
   };
 }
 
@@ -320,6 +256,7 @@ export async function rejectToolApproval(
 
 /**
  * P0: Execução idempotente e atômica de ferramenta previamente aprovada (APPROVED -> EXECUTING -> EXECUTED / FAILED)
+ * Enforça as 9 etapas obrigatórias de revalidação de política e segregação de funções.
  */
 export async function executeApprovedTool(
   approvalId: string,
@@ -335,13 +272,62 @@ export async function executeApprovedTool(
     throw new Error(`Solicitação de aprovação ${approvalId} não encontrada para a instância.`);
   }
 
-  // 2. PARTE 9: Verificar hash dos parâmetros
+  // 2. Validar Approval (status deve ser APPROVED)
+  if (req.status !== 'APPROVED') {
+    throw new Error(`Solicitação não pode ser executada: deve estar APPROVED (status atual: ${req.status})`);
+  }
+
+  // 3. Validar Expiração
+  if (req.expiresAt && new Date(req.expiresAt).getTime() < Date.now()) {
+    throw new Error(`Solicitação de aprovação ${approvalId} expirou e não pode ser executada.`);
+  }
+
+  // 4. Validar integridade dos parâmetros contra paramsHash
   const calculatedHash = calculateParamsHash(req.toolName, req.params);
   if (req.paramsHash !== calculatedHash) {
     throw new Error('PARAMS_HASH_MISMATCH: Os parâmetros foram alterados após a aprovação. Execução bloqueada.');
   }
 
-  // 3. PARTE 7: Transição atômica APPROVED -> EXECUTING (apenas UMA requisição vence)
+  // 5. Carregar Policy atual da instância (Fail-Closed)
+  const currentNivel = await maiaPolicyEngine.loadNivelForInstance(executor.instanceId);
+  if (currentNivel === 0) {
+    throw new Error('POLICY_REVALIDATION_FAILED: A MaIA está desativada nesta instância (Nível N0).');
+  }
+
+  // 6. Carregar metadata atual da Tool via Tool Gateway
+  const toolDef = toolGateway.getTool(req.toolName);
+  if (!toolDef) {
+    throw new Error(`Ferramenta '${req.toolName}' não registrada no Tool Gateway.`);
+  }
+
+  // 7. Validar Autonomia atual contra requisitos da Tool
+  if (currentNivel < toolDef.nivelMinimoAutonomia) {
+    throw new Error(`POLICY_REVALIDATION_FAILED: Nível de autonomia atual (N${currentNivel}) é inferior ao mínimo exigido (N${toolDef.nivelMinimoAutonomia}) para '${req.toolName}'.`);
+  }
+
+  // 8. Validar Risco & Snapshot
+  if (req.toolPolicySnapshot) {
+    if (toolDef.riskLevel === 'CRITICAL' && req.toolPolicySnapshot.riskLevel !== 'CRITICAL') {
+      throw new Error('POLICY_REVALIDATION_FAILED: O nível de risco da ferramenta foi elevado para CRITICAL após a aprovação.');
+    }
+  }
+
+  // 9. Validar Separation of Duties (SoD)
+  if (req.requestedBy.userId === req.resolvedBy?.userId && process.env.ALLOW_SELF_APPROVAL !== 'true') {
+    throw new Error('SEPARATION_OF_DUTIES_VIOLATION: O operador solicitante não pode aprovar a própria requisição.');
+  }
+
+  const requiresSoD = toolDef.requiresSeparationOfDuties ?? req.toolPolicySnapshot?.requiresSeparationOfDuties ?? false;
+  if (requiresSoD && process.env.ALLOW_SELF_APPROVAL !== 'true') {
+    if (req.resolvedBy?.userId === executor.userId) {
+      throw new Error('SEPARATION_OF_DUTIES_VIOLATION: Segregação de funções violada: quem aprovou a requisição não pode ser o executor.');
+    }
+    if (req.requestedBy.userId === executor.userId) {
+      throw new Error('SEPARATION_OF_DUTIES_VIOLATION: Segregação de funções violada: quem solicitou a ferramenta não pode ser o executor direto.');
+    }
+  }
+
+  // Transição atômica APPROVED -> EXECUTING (apenas UMA requisição vence)
   const executingReq = await maiaApprovalsRepository.setExecuting(approvalId, executor);
 
   await auditoriaService.logEvent({
@@ -352,7 +338,7 @@ export async function executeApprovedTool(
     action: 'APPROVAL_EXECUTION_STARTED',
     entityType: 'MAIA_APPROVAL',
     entityId: approvalId,
-    details: `Iniciada execução da ferramenta aprovada '${executingReq.toolName}'.`,
+    details: `Iniciada execução da ferramenta aprovada '${executingReq.toolName}' após revalidação de política e SoD.`,
     dadosPosteriores: {
       approvalId,
       status: 'EXECUTING',
@@ -363,17 +349,16 @@ export async function executeApprovedTool(
     isMaiaAction: true
   });
 
-  // 4. Executar ferramenta internamente
-  const rawFn = RAW_TOOL_IMPLEMENTATIONS[req.toolName];
-  if (!rawFn) {
-    await maiaApprovalsRepository.setFailed(approvalId, executor.instanceId, 'Implementação não encontrada');
-    throw new Error(`Implementação da ferramenta '${req.toolName}' não encontrada.`);
-  }
-
+  // Executar através do toolDef do Tool Gateway
   try {
-    const result = await rawFn(req.params, executor);
+    const result = await toolDef.execute(req.params, executor);
 
-    // 5. Marcar como executado com sucesso
+    // Zero Fake Success check
+    if (toolDef.mode === 'REAL' && (result as any)?.sucesso === false) {
+      throw new Error((result as any)?.mensagem || 'Falha na confirmação pelo sistema externo.');
+    }
+
+    // Marcar como executado com sucesso
     await maiaApprovalsRepository.setExecuted(approvalId, executor.instanceId, result);
 
     await auditoriaService.logEvent({
@@ -384,7 +369,7 @@ export async function executeApprovedTool(
       action: 'APPROVAL_EXECUTED',
       entityType: 'MAIA_APPROVAL',
       entityId: approvalId,
-      details: `Ferramenta '${req.toolName}' executada com sucesso após aprovação.`,
+      details: `Ferramenta '${req.toolName}' executada com sucesso e confirmação real pós-aprovação.`,
       dadosPosteriores: {
         approvalId,
         status: 'EXECUTED',
@@ -413,7 +398,7 @@ export async function executeApprovedTool(
       action: 'APPROVAL_EXECUTION_FAILED',
       entityType: 'MAIA_APPROVAL',
       entityId: approvalId,
-      details: `Falha na execução da ferramenta '${req.toolName}': ${executionError.message}`,
+      details: `Falha na execução da ferramenta aprovada '${req.toolName}': ${executionError.message}`,
       dadosPosteriores: {
         approvalId,
         status: 'FAILED',
@@ -429,7 +414,10 @@ export async function executeApprovedTool(
 }
 
 /**
- * Atalho de compatibilidade: Aprova e executa sequencialmente
+ * @deprecated TEST_ONLY / INTERNAL_ONLY
+ * Método mantido estritamente para compatibilidade de testes unitários legados.
+ * NUNCA utilize em rotas HTTP de produção. Em produção, a aprovação (POST /approve)
+ * e a execução (POST /execute) são duas operações rigorosamente segregadas.
  */
 export async function approveAndExecuteTool(
   approvalId: string,
@@ -442,42 +430,56 @@ export async function approveAndExecuteTool(
   return executeApprovedTool(approvalId, reviewer);
 }
 
-const TOOL_METADATA: Record<string, { name: string; description: string; nivelMinimoAutonomia: number; requerAprovacaoHumana: boolean }> = {
+const TOOL_METADATA: Record<string, {
+  name: string;
+  description: string;
+  nivelMinimoAutonomia: number;
+  requerAprovacaoHumana: boolean;
+  riskLevel: string;
+  requiresSeparationOfDuties?: boolean;
+}> = {
   consultar_viabilidade: {
     name: 'consultar_viabilidade',
     description: 'Consulta viabilidade técnica da rede FTTH GPON (modo simulado demo com disclaimer)',
     nivelMinimoAutonomia: 1,
-    requerAprovacaoHumana: false
+    requerAprovacaoHumana: false,
+    riskLevel: 'LOW'
   },
   recomendar_plano: {
     name: 'recomendar_plano',
     description: 'Analisa o catálogo de planos da operadora e sugere a melhor opção custo-benefício',
     nivelMinimoAutonomia: 1,
-    requerAprovacaoHumana: false
+    requerAprovacaoHumana: false,
+    riskLevel: 'LOW'
   },
   qualificar_lead: {
     name: 'qualificar_lead',
     description: 'Calcula o score de propensão de fechamento e temperatura do lead com validação de instância',
     nivelMinimoAutonomia: 2,
-    requerAprovacaoHumana: false
+    requerAprovacaoHumana: false,
+    riskLevel: 'MEDIUM'
   },
   aplicar_desconto_excecao: {
     name: 'aplicar_desconto_excecao',
     description: 'Aplica desconto de exceção em negociação (requer aprovação humana obrigatória)',
     nivelMinimoAutonomia: 3,
-    requerAprovacaoHumana: true
+    requerAprovacaoHumana: true,
+    riskLevel: 'CRITICAL'
   },
   consultar_sgp_cliente: {
     name: 'consultar_sgp_cliente',
     description: 'Consulta status de conexão, IP PPPoE, ONT e faturas abertas no SGP integrado (IXC / MK-Auth / Voalle)',
     nivelMinimoAutonomia: 1,
-    requerAprovacaoHumana: false
+    requerAprovacaoHumana: false,
+    riskLevel: 'LOW'
   },
   desbloquear_em_confianca: {
     name: 'desbloquear_em_confianca',
-    description: 'Executa desbloqueio temporário de 48h em confiança para cliente bloqueado por inadimplência',
-    nivelMinimoAutonomia: 2,
-    requerAprovacaoHumana: false
+    description: 'Executa desbloqueio temporário de 48h em confiança para cliente bloqueado por inadimplência no SGP',
+    nivelMinimoAutonomia: 3,
+    requerAprovacaoHumana: true,
+    riskLevel: 'CRITICAL',
+    requiresSeparationOfDuties: true
   }
 };
 
@@ -486,32 +488,32 @@ export const MAIA_TOOL_REGISTRY: Record<string, MaiaToolDefinition> = {
   consultar_viabilidade: {
     ...TOOL_METADATA.consultar_viabilidade,
     execute: (params, actor) => executeMaiaTool({ toolName: 'consultar_viabilidade', params, actor }),
-    _rawExecute: RAW_TOOL_IMPLEMENTATIONS.consultar_viabilidade
+    _rawExecute: INTERNAL_TOOL_EXECUTORS.consultar_viabilidade
   },
   recomendar_plano: {
     ...TOOL_METADATA.recomendar_plano,
     execute: (params, actor) => executeMaiaTool({ toolName: 'recomendar_plano', params, actor }),
-    _rawExecute: RAW_TOOL_IMPLEMENTATIONS.recomendar_plano
+    _rawExecute: INTERNAL_TOOL_EXECUTORS.recomendar_plano
   },
   qualificar_lead: {
     ...TOOL_METADATA.qualificar_lead,
     execute: (params, actor) => executeMaiaTool({ toolName: 'qualificar_lead', params, actor }),
-    _rawExecute: RAW_TOOL_IMPLEMENTATIONS.qualificar_lead
+    _rawExecute: INTERNAL_TOOL_EXECUTORS.qualificar_lead
   },
   aplicar_desconto_excecao: {
     ...TOOL_METADATA.aplicar_desconto_excecao,
     execute: (params, actor) => executeMaiaTool({ toolName: 'aplicar_desconto_excecao', params, actor }),
-    _rawExecute: RAW_TOOL_IMPLEMENTATIONS.aplicar_desconto_excecao
+    _rawExecute: INTERNAL_TOOL_EXECUTORS.aplicar_desconto_excecao
   },
   consultar_sgp_cliente: {
     ...TOOL_METADATA.consultar_sgp_cliente,
     execute: (params, actor) => executeMaiaTool({ toolName: 'consultar_sgp_cliente', params, actor }),
-    _rawExecute: RAW_TOOL_IMPLEMENTATIONS.consultar_sgp_cliente
+    _rawExecute: INTERNAL_TOOL_EXECUTORS.consultar_sgp_cliente
   },
   desbloquear_em_confianca: {
     ...TOOL_METADATA.desbloquear_em_confianca,
     execute: (params, actor) => executeMaiaTool({ toolName: 'desbloquear_em_confianca', params, actor }),
-    _rawExecute: RAW_TOOL_IMPLEMENTATIONS.desbloquear_em_confianca
+    _rawExecute: INTERNAL_TOOL_EXECUTORS.desbloquear_em_confianca
   }
 };
 
@@ -536,7 +538,7 @@ toolGateway.registerTool({
     bairro: z.string().optional(),
     contatoId: z.string().optional()
   }),
-  execute: RAW_TOOL_IMPLEMENTATIONS.consultar_viabilidade
+  execute: INTERNAL_TOOL_EXECUTORS.consultar_viabilidade
 });
 
 toolGateway.registerTool({
@@ -547,7 +549,7 @@ toolGateway.registerTool({
   requerAprovacaoHumana: false,
   riskLevel: 'LOW',
   mode: 'REAL',
-  execute: RAW_TOOL_IMPLEMENTATIONS.recomendar_plano
+  execute: INTERNAL_TOOL_EXECUTORS.recomendar_plano
 });
 
 toolGateway.registerTool({
@@ -561,7 +563,7 @@ toolGateway.registerTool({
   parametersSchema: z.object({
     contatoId: z.string().min(1, 'contatoId é obrigatório')
   }),
-  execute: RAW_TOOL_IMPLEMENTATIONS.qualificar_lead
+  execute: INTERNAL_TOOL_EXECUTORS.qualificar_lead
 });
 
 toolGateway.registerTool({
@@ -576,7 +578,7 @@ toolGateway.registerTool({
     dealId: z.string().min(1, 'dealId é obrigatório'),
     desconto: z.number().optional()
   }),
-  execute: RAW_TOOL_IMPLEMENTATIONS.aplicar_desconto_excecao
+  execute: INTERNAL_TOOL_EXECUTORS.aplicar_desconto_excecao
 });
 
 toolGateway.registerTool({
@@ -587,19 +589,20 @@ toolGateway.registerTool({
   requerAprovacaoHumana: false,
   riskLevel: 'LOW',
   mode: 'REAL',
-  execute: RAW_TOOL_IMPLEMENTATIONS.consultar_sgp_cliente
+  execute: INTERNAL_TOOL_EXECUTORS.consultar_sgp_cliente
 });
 
 toolGateway.registerTool({
   name: 'desbloquear_em_confianca',
-  description: 'Executa desbloqueio temporário de 48h em confiança para cliente bloqueado por inadimplência',
+  description: 'Executa desbloqueio temporário de 48h em confiança para cliente bloqueado por inadimplência no SGP',
   category: 'SGP',
-  nivelMinimoAutonomia: 2,
-  requerAprovacaoHumana: false,
-  riskLevel: 'HIGH',
+  nivelMinimoAutonomia: 3,
+  requerAprovacaoHumana: true,
+  riskLevel: 'CRITICAL',
+  requiresSeparationOfDuties: true,
   mode: 'REAL',
   parametersSchema: z.object({
     contratoId: z.string().min(1, 'contratoId é obrigatório')
   }),
-  execute: RAW_TOOL_IMPLEMENTATIONS.desbloquear_em_confianca
+  execute: INTERNAL_TOOL_EXECUTORS.desbloquear_em_confianca
 });
