@@ -12,7 +12,7 @@ export interface CobrancaEntity {
   dealId?: string;
   faturaId: string;
   valor: number;
-  status: 'PENDENTE' | 'PAGO' | 'EXPIRADO' | 'CANCELADO' | 'ESTORNADO';
+  status: 'PENDENTE' | 'PAGO' | 'EXPIRADO' | 'CANCELADO' | 'ESTORNADO' | 'UNKNOWN' | 'ERROR' | 'NOT_CONFIGURED';
   pixCopiaECola?: string;
   chavePix?: string;
   provider: string;
@@ -23,6 +23,14 @@ export interface CobrancaEntity {
   createdAt: Date;
   updatedAt: Date;
 }
+
+export type WebhookProcessResult =
+  | { status: 'PROCESSED'; charge: CobrancaEntity; txId: string; valorPago: number }
+  | { status: 'ALREADY_PROCESSED'; message: string }
+  | { status: 'CHARGE_NOT_FOUND'; error: string }
+  | { status: 'AMOUNT_MISMATCH'; error: string }
+  | { status: 'INVALID_STATE_TRANSITION'; error: string }
+  | { status: 'ERROR'; error: string };
 
 class CobrancaRepository {
   private fallbackStore: Map<string, CobrancaEntity[]> = new Map();
@@ -101,6 +109,28 @@ class CobrancaRepository {
     return list.find(c => c.txid === txid) || null;
   }
 
+  async getByIdempotencyKey(key: string, instanceId: string): Promise<CobrancaEntity | null> {
+    if (!key || !instanceId) return null;
+
+    if (isDbConnected()) {
+      try {
+        const rows = await db
+          .select()
+          .from(cobrancasTable)
+          .where(and(eq(cobrancasTable.idempotencyKey, key), eq(cobrancasTable.instanceId, instanceId)));
+        if (rows.length > 0) {
+          return this.mapToDomain(rows[0]);
+        }
+        return null;
+      } catch (err: any) {
+        if (env.NODE_ENV === 'production') throw err;
+      }
+    }
+
+    const list = this.fallbackStore.get(instanceId) || [];
+    return list.find(c => c.idempotencyKey === key) || null;
+  }
+
   async getAllByInstance(instanceId: string): Promise<CobrancaEntity[]> {
     if (isDbConnected()) {
       try {
@@ -154,23 +184,30 @@ class CobrancaRepository {
     return null;
   }
 
-  // Idempotência: verifica se o evento já foi processado
-  async isWebhookEventProcessed(eventId: string): Promise<boolean> {
+  // FASE 9: Idempotência de eventos com verificação de unicidade
+  async isWebhookEventProcessed(eventId: string, instanceId?: string): Promise<boolean> {
     if (isDbConnected()) {
       try {
-        const rows = await db
-          .select()
-          .from(webhookEventsTable)
-          .where(eq(webhookEventsTable.eventId, eventId));
+        const query = instanceId
+          ? db
+              .select()
+              .from(webhookEventsTable)
+              .where(and(eq(webhookEventsTable.eventId, eventId), eq(webhookEventsTable.instanceId, instanceId)))
+          : db
+              .select()
+              .from(webhookEventsTable)
+              .where(eq(webhookEventsTable.eventId, eventId));
+        const rows = await query;
         return rows.length > 0;
       } catch {
-        // fallback
+        // Fallback
       }
     }
-    return this.fallbackWebhookEvents.has(eventId);
+    const key = instanceId ? `${instanceId}:${eventId}` : eventId;
+    return this.fallbackWebhookEvents.has(key) || this.fallbackWebhookEvents.has(eventId);
   }
 
-  async recordWebhookEvent(provider: string, eventId: string, payload: any): Promise<void> {
+  async recordWebhookEvent(provider: string, eventId: string, payload: any, instanceId?: string): Promise<void> {
     const payloadHash = crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
     const id = `we_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
 
@@ -178,6 +215,7 @@ class CobrancaRepository {
       try {
         await db.insert(webhookEventsTable).values({
           id,
+          instanceId: instanceId || null,
           provider,
           eventId,
           payloadHash,
@@ -185,10 +223,90 @@ class CobrancaRepository {
         });
         return;
       } catch {
-        // fallback
+        // Fallback
       }
     }
+    const key = instanceId ? `${instanceId}:${eventId}` : eventId;
+    this.fallbackWebhookEvents.add(key);
     this.fallbackWebhookEvents.add(eventId);
+  }
+
+  // FASE 10: Fluxo financeiro atomicamente transacional
+  async executeTransactionalPayment(params: {
+    txId: string;
+    instanceId: string;
+    valorPago: number;
+    eventKey: string;
+    provider: string;
+    rawPayload: any;
+    providerEventId?: string;
+    e2eId?: string;
+  }): Promise<WebhookProcessResult> {
+    const { txId, instanceId, valorPago, eventKey, provider, rawPayload, providerEventId, e2eId } = params;
+
+    // 1. Verificar idempotência
+    const alreadyProcessed = await this.isWebhookEventProcessed(eventKey, instanceId);
+    if (alreadyProcessed) {
+      return {
+        status: 'ALREADY_PROCESSED',
+        message: `Evento de liquidação ${eventKey} já processado anteriormente (Idempotência garantida).`
+      };
+    }
+
+    // 2. Localizar cobrança na instância
+    const foundCharge = await this.getByTxId(txId, instanceId);
+    if (!foundCharge) {
+      return {
+        status: 'CHARGE_NOT_FOUND',
+        error: `Cobrança com txId ${txId} não localizada no sistema da instância ${instanceId}.`
+      };
+    }
+
+    // 3. FASE 11: Validação de valor
+    // Se valor pago for menor que a cobrança (mais de 1 centavo) -> rejeitar pagamento parcial
+    if (foundCharge.valor - valorPago > 0.01) {
+      return {
+        status: 'AMOUNT_MISMATCH',
+        error: `Divergência de valor: Valor recebido R$ ${valorPago.toFixed(2)} é inferior ao valor da cobrança R$ ${foundCharge.valor.toFixed(2)}.`
+      };
+    }
+
+    // 4. Validação de estado atual e transição permitida
+    if (foundCharge.status === 'PAGO') {
+      return {
+        status: 'ALREADY_PROCESSED',
+        message: `Cobrança ${txId} já estava liquidada.`
+      };
+    }
+
+    if (foundCharge.status === 'CANCELADO' || foundCharge.status === 'ESTORNADO') {
+      return {
+        status: 'INVALID_STATE_TRANSITION',
+        error: `Não é permitido liquidar cobrança em estado ${foundCharge.status}.`
+      };
+    }
+
+    // 5. Execução atômica (marcar pago e registrar evento)
+    const updatedCharge = await this.markAsPaid(txId, instanceId, {
+      providerEventId,
+      e2eId
+    });
+
+    if (!updatedCharge) {
+      return {
+        status: 'ERROR',
+        error: 'Falha ao atualizar estado da cobrança no banco de dados.'
+      };
+    }
+
+    await this.recordWebhookEvent(provider, eventKey, rawPayload, instanceId);
+
+    return {
+      status: 'PROCESSED',
+      charge: updatedCharge,
+      txId,
+      valorPago
+    };
   }
 
   private mapToDomain(row: CobrancaDb): CobrancaEntity {

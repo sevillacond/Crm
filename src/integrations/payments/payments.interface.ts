@@ -8,15 +8,25 @@ export type PaymentExecutionMode = 'MOCK_SANDBOX' | 'GATEWAY_PRODUCAO';
 
 export type PaymentProviderStatus =
   | 'NOT_CONFIGURED'
+  | 'CONFIGURED'
+  | 'AUTHENTICATED'
+  | 'CONNECTED'
   | 'MOCK'
   | 'STUB'
   | 'ADAPTER'
   | 'ADAPTER_PARTIAL'
-  | 'CONNECTED'
   | 'PRODUCTION'
   | 'ERROR';
 
-export type ChargePaymentStatus = 'PENDENTE' | 'PAGO' | 'EXPIRADO' | 'CANCELADO' | 'ESTORNADO';
+export type ChargePaymentStatus =
+  | 'PENDENTE'
+  | 'PAGO'
+  | 'EXPIRADO'
+  | 'CANCELADO'
+  | 'ESTORNADO'
+  | 'UNKNOWN'
+  | 'ERROR'
+  | 'NOT_CONFIGURED';
 
 export interface PixCobrancaPayload {
   valor: number;
@@ -50,8 +60,9 @@ export interface IPaymentProvider {
   getCharge(txId: string): Promise<{ txId: string; status: ChargePaymentStatus; valor: number; statusIntegracao: PaymentProviderStatus }>;
   cancelCharge(txId: string): Promise<{ cancelado: boolean; statusIntegracao: PaymentProviderStatus; motivo?: string }>;
   refundCharge(txId: string, valor?: number): Promise<{ estornado: boolean; statusIntegracao: PaymentProviderStatus; motivo?: string }>;
-  processWebhook(payload: any, signature?: string, timestamp?: string): Promise<{ liquidado: boolean; txId?: string; valorPago?: number; idempotencyKey?: string; erro?: string }>;
+  processWebhook(payload: any, signature?: string, timestamp?: string, rawBody?: Buffer | string): Promise<{ liquidado: boolean; txId?: string; valorPago?: number; idempotencyKey?: string; erro?: string }>;
   reconcile(txId: string): Promise<{ conciliado: boolean; status: ChargePaymentStatus; statusIntegracao: PaymentProviderStatus }>;
+  checkConnection?(): Promise<{ status: PaymentProviderStatus; latencyMs?: number; erro?: string }>;
 }
 
 export interface IPaymentsAdapter extends IPaymentProvider {

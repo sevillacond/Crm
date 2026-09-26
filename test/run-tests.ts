@@ -1536,6 +1536,21 @@ async function main() {
     assert.strictEqual(alreadyAfter, true, 'Deve confirmar evento idempotente como já processado');
   });
 
+  await runTest('11.7 WhatsApp: Webhook rejeita verificação sem WHATSAPP_VERIFY_TOKEN em produção', async () => {
+    const { whatsappAdapter } = await import('../src/integrations/whatsapp/whatsapp.adapter.ts');
+    const originalEnv = process.env.NODE_ENV;
+    const originalToken = process.env.WHATSAPP_VERIFY_TOKEN;
+    try {
+      process.env.NODE_ENV = 'production';
+      delete process.env.WHATSAPP_VERIFY_TOKEN;
+      const res = whatsappAdapter.verificarWebhookToken('subscribe', 'qualquer_token', 'desafio_123');
+      assert.strictEqual(res, null, 'Deve recusar desafio se token não estiver configurado em produção');
+    } finally {
+      process.env.NODE_ENV = originalEnv;
+      if (originalToken) process.env.WHATSAPP_VERIFY_TOKEN = originalToken;
+    }
+  });
+
   console.log('\n------------------------------------------------------');
   console.log(`Resultado Final: ${passedCount} passou, ${failedCount} falhou.`);
   console.log('------------------------------------------------------\n');

@@ -27,6 +27,7 @@ export const cobrancasTable = pgTable('cobrancas', {
 
 export const webhookEventsTable = pgTable('webhook_events', {
   id: varchar('id', { length: 64 }).primaryKey(),
+  instanceId: varchar('instance_id', { length: 64 }).references(() => instancesTable.id, { onDelete: 'cascade' }),
   provider: varchar('provider', { length: 32 }).notNull(),
   eventId: varchar('event_id', { length: 128 }).notNull().unique(),
   payloadHash: varchar('payload_hash', { length: 64 }).notNull(),

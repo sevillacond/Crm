@@ -11,6 +11,7 @@ export interface SgpContractMock {
   planoContratado: string;
   statusConexao: 'CONECTADO' | 'DESCONECTADO' | 'BLOQUEADO' | 'REDUZIDO';
   ipPppoe?: string;
+  loginPppoe?: string;
   macOnt?: string;
   sinalRxDbm?: number;
   uptimeHoras?: number;
@@ -193,6 +194,32 @@ class SgpService {
 
     if (!contract.desbloqueioConfiancaDisponivel) {
       throw new Error('Desbloqueio em confiança não permitido para este contrato ou já utilizado no ciclo atual.');
+    }
+
+    // FASE 14: Confirmação com API SGP real quando configurada
+    if (sgpAdapter.isConfigurado()) {
+      const apiResult = await sgpAdapter.desbloquearConfianca(contract.loginPppoe || contratoId);
+      if (!apiResult.sucesso) {
+        return {
+          sucesso: false,
+          contratoId,
+          statusAnterior: contract.statusConexao,
+          novoStatus: contract.statusConexao,
+          protocolo: '',
+          expiraEm: '',
+          mensagem: `Desbloqueio recusado pelo provedor SGP (${contract.provedorSgp}): ${apiResult.mensagem}`
+        };
+      }
+    } else if (process.env.NODE_ENV === 'production') {
+      return {
+        sucesso: false,
+        contratoId,
+        statusAnterior: contract.statusConexao,
+        novoStatus: contract.statusConexao,
+        protocolo: '',
+        expiraEm: '',
+        mensagem: 'Operação recusada: Provedor SGP não configurado nesta instância em produção.'
+      };
     }
 
     const statusAnterior = contract.statusConexao;

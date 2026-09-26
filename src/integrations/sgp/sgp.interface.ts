@@ -12,6 +12,9 @@ export type SgpConnectionStatus =
   | 'UNAUTHORIZED'
   | 'TIMEOUT'
   | 'NETWORK_ERROR'
+  | 'RATE_LIMITED'
+  | 'SERVER_ERROR'
+  | 'CONNECTED'
   | 'NOT_CONFIGURED';
 
 export type SgpAdapterStatus =

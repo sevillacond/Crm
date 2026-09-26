@@ -9,6 +9,7 @@ export interface AppConfig {
   REDIS_URL?: string;
   CORS_ORIGINS: string[];
   INSTANCE_ID?: string;
+  PAYMENTS_ALLOW_MOCK?: boolean;
   ADMIN_INITIAL_EMAIL?: string;
   ADMIN_INITIAL_PASSWORD?: string;
   PROVIDER_CNPJ?: string;
@@ -144,6 +145,12 @@ export function validateEnv(overrideEnv?: Record<string, string | undefined>): A
       : ['http://localhost:3000', 'http://127.0.0.1:3000'];
   }
 
+  // 8. Payments Mock validation (P0: Proibido em produção)
+  const paymentsAllowMock = envSource.PAYMENTS_ALLOW_MOCK === 'true';
+  if (isProduction && paymentsAllowMock) {
+    failFast('[FATAL] Em ambiente de PRODUÇÃO, PAYMENTS_ALLOW_MOCK=true é estritamente proibido.');
+  }
+
   return {
     NODE_ENV: nodeEnv,
     PORT: port,
@@ -152,6 +159,7 @@ export function validateEnv(overrideEnv?: Record<string, string | undefined>): A
     REDIS_URL: envSource.REDIS_URL,
     CORS_ORIGINS: corsOrigins,
     INSTANCE_ID: instanceId,
+    PAYMENTS_ALLOW_MOCK: paymentsAllowMock,
     ADMIN_INITIAL_EMAIL: adminInitialEmail,
     ADMIN_INITIAL_PASSWORD: adminInitialPassword,
     PROVIDER_CNPJ: providerCnpj,

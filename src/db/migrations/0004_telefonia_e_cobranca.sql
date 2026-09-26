@@ -42,7 +42,7 @@ BEGIN
     valor NUMERIC(10, 2) NOT NULL,
     status VARCHAR(32) NOT NULL DEFAULT 'PENDENTE' CHECK (status IN ('PENDENTE', 'PAGO', 'EXPIRADO', 'CANCELADO', 'ESTORNADO')),
     pix_copia_e_cola TEXT,
-    chave_pix VARCHAR(128),
+    chavePix VARCHAR(128),
     provider VARCHAR(64) NOT NULL DEFAULT 'NOT_CONFIGURED',
     provider_event_id VARCHAR(128),
     e2e_id VARCHAR(128),
@@ -59,6 +59,7 @@ BEGIN
   -- 3. Tabela de eventos de webhooks para proteção contra replay e idempotência
   CREATE TABLE IF NOT EXISTS webhook_events (
     id VARCHAR(64) PRIMARY KEY,
+    instance_id VARCHAR(64) REFERENCES instances(id) ON DELETE CASCADE,
     provider VARCHAR(32) NOT NULL,
     event_id VARCHAR(128) NOT NULL UNIQUE,
     payload_hash VARCHAR(64) NOT NULL,
@@ -67,4 +68,5 @@ BEGIN
   );
 
   CREATE INDEX IF NOT EXISTS idx_webhook_events_event_id ON webhook_events(event_id);
+  CREATE INDEX IF NOT EXISTS idx_webhook_events_instance ON webhook_events(instance_id);
 END $$;

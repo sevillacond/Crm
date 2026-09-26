@@ -6,6 +6,7 @@ import { cobrancaRepository } from '../../modules/cobranca/cobranca.repository.t
 import { contatosRepository } from '../../modules/contatos/contatos.repository.ts';
 import { dealsRepository } from '../../modules/deals/deals.repository.ts';
 import { auditoriaService } from '../../modules/auditoria/auditoria.service.ts';
+import { env } from '../../config/env.ts';
 
 const router = Router();
 
@@ -20,7 +21,7 @@ router.get(
 
     res.json({
       instanceId,
-      gatewayConfigurado: paymentsAdapter.isConfigurado(),
+      gatewayConfigurado: paymentsAdapter.isGatewayConectado(),
       gatewayStatus: paymentsAdapter.status,
       faturas
     });
@@ -28,7 +29,7 @@ router.get(
 );
 
 // POST /api/cobranca/pix (Requires cobranca:read permission)
-// FASE 7: Proíbe clientes/CPFs falsos. Resolve contato e negócio persistidos via instanceId do ActorContext
+// FASE 12 & FASE 13: Entidades persistidas, isolamento por instanceId e Idempotência prévia
 router.post(
   '/pix',
   authMiddleware,
@@ -43,11 +44,36 @@ router.post(
         return;
       }
 
+      // FASE 13: Extrair e validar chave de idempotência para evitar emissão duplicada
+      const idempotencyKey =
+        (req.headers['idempotency-key'] as string) ||
+        req.body.idempotencyKey ||
+        (faturaId ? `pix_fat_${faturaId}` : undefined);
+
+      if (idempotencyKey) {
+        const existingCharge = await cobrancaRepository.getByIdempotencyKey(idempotencyKey, actor.instanceId);
+        if (existingCharge && ['PENDENTE', 'PAGO'].includes(existingCharge.status)) {
+          res.status(200).json({
+            modoExecucao: existingCharge.provider,
+            statusIntegracao: paymentsAdapter.status,
+            copiaECola: existingCharge.pixCopiaECola,
+            txId: existingCharge.txid,
+            valor: existingCharge.valor,
+            expiracaoMinutos: 60,
+            chavePix: existingCharge.chavePix || '',
+            status: existingCharge.status,
+            cobrancaId: existingCharge.id,
+            isIdempotentReplay: true
+          });
+          return;
+        }
+      }
+
       let nomeCliente = req.body.nomeCliente;
       let cpfCnpj = req.body.cpfCnpj;
       let resolvedContatoId = contatoId;
 
-      // 1. Se dealId fornecido, buscar e validar no escopo da instância
+      // 1. Se dealId fornecido, buscar e validar no escopo exclusivo da instância
       if (dealId) {
         const deal = await dealsRepository.getById(dealId, actor.instanceId);
         if (!deal) {
@@ -68,7 +94,7 @@ router.post(
         cpfCnpj = contato.cpfCnpj;
       }
 
-      // 3. P0 Zero Fake Success: Rejeitar cliente ou documento fictício genérico
+      // 3. FASE 12 Zero Fake Success: Rejeitar cliente ou documento fictício genérico
       if (!cpfCnpj || cpfCnpj.trim() === '' || cpfCnpj === '000.000.000-00') {
         res.status(400).json({
           error: {
@@ -101,10 +127,11 @@ router.post(
         faturaId: generatedFaturaId,
         contatoId: resolvedContatoId,
         dealId,
-        instanceId: actor.instanceId
+        instanceId: actor.instanceId,
+        idempotencyKey
       });
 
-      // 5. Persistir entidade de cobrança com txid e isolamento de instância
+      // 5. Persistir entidade de cobrança com txid, idempotencyKey e isolamento de instância
       const entity = await cobrancaRepository.create({
         instanceId: actor.instanceId,
         txid: cobrancaResult.txId,
@@ -115,7 +142,8 @@ router.post(
         status: cobrancaResult.status,
         pixCopiaECola: cobrancaResult.copiaECola,
         chavePix: cobrancaResult.chavePix,
-        provider: cobrancaResult.modoExecucao
+        provider: cobrancaResult.modoExecucao,
+        idempotencyKey
       });
 
       // 6. Auditoria de geração de cobrança
@@ -142,13 +170,14 @@ router.post(
 );
 
 // POST /api/cobranca/webhook
-// FASE 6: Webhook financeiro de alta criticidade com validação de HMAC, timestamp, schema, txid e idempotência
+// FASE 5 a 11: Webhook financeiro de alta criticidade com validação HMAC timing-safe, replay, isolamento dedicado e transação atômica
 router.post('/webhook', async (req: Request, res: Response) => {
   const signature = (req.headers['x-signature'] || req.headers['x-hub-signature-256'] || req.headers['x-signature-sha256']) as string | undefined;
   const timestamp = (req.headers['x-timestamp'] || req.headers['x-webhook-timestamp']) as string | undefined;
+  const rawBody = (req as any).rawBody as Buffer | undefined;
 
-  // 1. Processar webhook no adapter
-  const result = await paymentsAdapter.processWebhook(req.body, signature, timestamp);
+  // 1. Processar e validar assinatura HMAC e timestamp no adapter
+  const result = await paymentsAdapter.processWebhook(req.body, signature, timestamp, rawBody);
   if (!result.liquidado || !result.txId) {
     res.status(400).json({
       status: 'REJECTED',
@@ -162,85 +191,72 @@ router.post('/webhook', async (req: Request, res: Response) => {
 
   const { txId, valorPago, idempotencyKey } = result;
 
-  // 2. Proteção contra duplicidade / Idempotência
-  const eventKey = idempotencyKey || txId;
-  const alreadyProcessed = await cobrancaRepository.isWebhookEventProcessed(eventKey);
-  if (alreadyProcessed) {
-    res.status(200).json({
-      status: 'ALREADY_PROCESSED',
-      message: `Evento de liquidação ${eventKey} já processado anteriormente (Idempotência garantida).`
-    });
-    return;
-  }
+  // FASE 8: Webhook sem descoberta global de instâncias (instalação dedicada única)
+  const localInstanceId = env.INSTANCE_ID || 'inst-dev-local-001';
 
-  // 3. Localizar a cobrança pelo txId
-  // Nota: Webhook externo não possui contexto de ator, pesquisa global de txId garantindo isolamento pelo registro encontrado
-  const allInstances = ['inst-enlace-fibra-001', process.env.INSTANCE_ID || ''];
-  let foundCharge = null;
-  for (const inst of allInstances) {
-    if (inst) {
-      foundCharge = await cobrancaRepository.getByTxId(txId, inst);
-      if (foundCharge) break;
-    }
-  }
-
-  if (!foundCharge) {
-    res.status(404).json({
-      status: 'CHARGE_NOT_FOUND',
-      error: { code: 'CHARGE_NOT_FOUND', message: `Cobrança com txId ${txId} não localizada no sistema.` }
-    });
-    return;
-  }
-
-  // 4. Validação de valor (tolerância máxima de 1 centavo)
-  if (valorPago && Math.abs(foundCharge.valor - valorPago) > 0.01) {
-    res.status(422).json({
-      status: 'AMOUNT_MISMATCH',
-      error: {
-        code: 'AMOUNT_MISMATCH',
-        message: `Divergência de valor: Cobrança registrada R$ ${foundCharge.valor.toFixed(2)}, recebido R$ ${valorPago.toFixed(2)}.`
-      }
-    });
-    return;
-  }
-
-  // 5. Validação de estado atual e transição permitida
-  if (foundCharge.status === 'PAGO') {
-    res.status(200).json({ status: 'ALREADY_PAID', message: `Cobrança ${txId} já estava liquidada.` });
-    return;
-  }
-
-  if (foundCharge.status === 'CANCELADO' || foundCharge.status === 'ESTORNADO') {
-    res.status(409).json({
-      status: 'INVALID_STATE_TRANSITION',
-      error: {
-        code: 'INVALID_STATE_TRANSITION',
-        message: `Não é permitido liquidar cobrança em estado ${foundCharge.status}.`
-      }
-    });
-    return;
-  }
-
-  // 6. Atualização transacional para PAGO
-  await cobrancaRepository.markAsPaid(txId, foundCharge.instanceId, {
+  // FASE 10: Execução atomicamente transacional (Idempotência, Localização, Validação de Valor e Atualização)
+  const txResult = await cobrancaRepository.executeTransactionalPayment({
+    txId,
+    instanceId: localInstanceId,
+    valorPago: valorPago || 0,
+    eventKey: idempotencyKey || txId,
+    provider: 'ENLACE_PAY',
+    rawPayload: req.body,
     providerEventId: req.body?.eventId || req.body?.id,
     e2eId: req.body?.pix?.[0]?.endToEndId || req.body?.pix?.[0]?.e2eId
   });
 
-  // 7. Gravação de evento para idempotência
-  await cobrancaRepository.recordWebhookEvent('ENLACE_PAY', eventKey, req.body);
+  if (txResult.status === 'ALREADY_PROCESSED') {
+    res.status(200).json({
+      status: 'ALREADY_PROCESSED',
+      message: txResult.message
+    });
+    return;
+  }
 
-  // 8. Trilha de auditoria obrigatória
+  if (txResult.status === 'CHARGE_NOT_FOUND') {
+    res.status(404).json({
+      status: 'CHARGE_NOT_FOUND',
+      error: { code: 'CHARGE_NOT_FOUND', message: txResult.error }
+    });
+    return;
+  }
+
+  if (txResult.status === 'AMOUNT_MISMATCH') {
+    res.status(422).json({
+      status: 'AMOUNT_MISMATCH',
+      error: { code: 'AMOUNT_MISMATCH', message: txResult.error }
+    });
+    return;
+  }
+
+  if (txResult.status === 'INVALID_STATE_TRANSITION') {
+    res.status(409).json({
+      status: 'INVALID_STATE_TRANSITION',
+      error: { code: 'INVALID_STATE_TRANSITION', message: txResult.error }
+    });
+    return;
+  }
+
+  if (txResult.status !== 'PROCESSED' || !txResult.charge) {
+    res.status(500).json({
+      status: 'ERROR',
+      error: { code: 'PAYMENT_PROCESSING_ERROR', message: (txResult as any).error || 'Falha ao processar liquidação.' }
+    });
+    return;
+  }
+
+  // FASE 10: Registro na trilha imutável de auditoria
   await auditoriaService.logEvent({
-    instanceId: foundCharge.instanceId,
+    instanceId: localInstanceId,
     actorId: 'system_webhook',
     actorName: 'Webhook Financeiro Enlace-Pay',
     actorRole: 'ADMIN',
     action: 'COBRANCA_LIQUIDADA_WEBHOOK',
     entityType: 'COBRANCA',
-    entityId: foundCharge.id,
-    details: `Cobrança ${foundCharge.id} (TxId: ${txId}) liquidada via webhook no valor de R$ ${(valorPago || foundCharge.valor).toFixed(2)}.`,
-    dadosPosteriores: { txId, valorPago: valorPago || foundCharge.valor, status: 'PAGO' }
+    entityId: txResult.charge.id,
+    details: `Cobrança ${txResult.charge.id} (TxId: ${txId}) liquidada via webhook no valor de R$ ${(valorPago || txResult.charge.valor).toFixed(2)}.`,
+    dadosPosteriores: { txId, valorPago: valorPago || txResult.charge.valor, status: 'PAGO' }
   });
 
   res.status(200).json({

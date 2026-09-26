@@ -53,9 +53,9 @@ USER enlace
 # Expor porta padrão de execução
 EXPOSE 3000
 
-# Health check para orquestradores (Kubernetes, AWS ECS, Google Cloud Run)
+# Health check padronizado sem dependência de curl/wget (Utiliza o runtime nativo do Bun)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/health/ready || exit 1
+  CMD bun -e "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 # Comando de inicialização via Bun (Execução nativa de TypeScript com suporte a sinais POSIX)
 CMD ["bun", "server.ts"]
